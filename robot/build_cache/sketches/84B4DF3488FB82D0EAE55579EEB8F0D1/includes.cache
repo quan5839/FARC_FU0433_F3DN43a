@@ -1,0 +1,122 @@
+[
+  {
+    "Sourcefile": null,
+    "Include": "",
+    "Includepath": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/cores/esp32"
+  },
+  {
+    "Sourcefile": null,
+    "Include": "",
+    "Includepath": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/variants/esp32"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "PS2X_lib.h",
+    "Includepath": "/Users/admin/Documents/Arduino/libraries/Arduino-PS2X-ESP32-Makerbot-master"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "SPI.h",
+    "Includepath": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/libraries/SPI/src"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "Adafruit_PWMServoDriver.h",
+    "Includepath": "/Users/admin/Documents/Arduino/libraries/Adafruit_PWM_Servo_Driver_Library"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "Adafruit_I2CDevice.h",
+    "Includepath": "/Users/admin/Documents/Arduino/libraries/Adafruit_BusIO"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "Wire.h",
+    "Includepath": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/libraries/Wire/src"
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/robot.ino.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/controller/PS2_controller.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/hal/motor.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/hal/pca9685_driver.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/hal/servos.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/robot/robot.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/robot/state_machine.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/utils/safety_monitor.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/robot/build_cache/sketches/84B4DF3488FB82D0EAE55579EEB8F0D1/sketch/src/utils/validation.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Arduino-PS2X-ESP32-Makerbot-master/PS2X_lib.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/libraries/SPI/src/SPI.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Adafruit_PWM_Servo_Driver_Library/Adafruit_PWMServoDriver.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Adafruit_BusIO/Adafruit_BusIO_Register.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Adafruit_BusIO/Adafruit_GenericDevice.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Adafruit_BusIO/Adafruit_I2CDevice.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Documents/Arduino/libraries/Adafruit_BusIO/Adafruit_SPIDevice.cpp",
+    "Include": "",
+    "Includepath": null
+  },
+  {
+    "Sourcefile": "/Users/admin/Library/Arduino15/packages/esp32/hardware/esp32/3.2.1/libraries/Wire/src/Wire.cpp",
+    "Include": "",
+    "Includepath": null
+  }
+]
