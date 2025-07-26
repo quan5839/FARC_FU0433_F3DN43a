@@ -1,15 +1,13 @@
 #ifndef ROBOT_H
 #define ROBOT_H
 
-#include "../hal/motor.h" // Use relative path for linter compatibility
-// NOTE: Linter errors about includes can be ignored; code compiles with Arduino CLI/IDE.
+#include "../hal/motor.h"
+#include "../hal/imu.h"
+#include "../hal/ws2812b_strip.h"
 #include "../config.h"
 #include "../controller/controller_state.h"
 #include "state_machine.h"
-#include <stdint.h> // For uint8_t, etc. (linter compatibility)
-#ifndef HIGH
-#define HIGH 1
-#endif
+#include <stdint.h>
 
 /**
  * @class Robot
@@ -70,6 +68,63 @@ public:
      */
     bool readLimitSwitch();
 
+    /**
+     * @brief Perform comprehensive I2C health diagnostics.
+     */
+    void performI2CHealthCheck();
+
+    /**
+     * @brief Print I2C diagnostic information.
+     */
+    void printI2CDiagnostics() const;
+
+    /**
+     * @brief Test I2C speed and stability with multiple transactions.
+     */
+    void testI2CPerformance();
+
+    /**
+     * @brief Scan I2C bus for connected devices.
+     */
+    void scanI2CBus();
+
+    /**
+     * @brief Initialize WS2812B LED strip
+     */
+    void initLEDStrip();
+
+    /**
+     * @brief Update LED strip based on robot status
+     */
+    void updateLEDStrip();
+
+    /**
+     * @brief Enable LED strip power
+     */
+    void enableLEDStrip();
+
+    /**
+     * @brief Disable LED strip power
+     */
+    void disableLEDStrip();
+
+    /**
+     * @brief Test IMU functionality and print readings
+     */
+    void testIMU();
+
+    /**
+     * @brief Print current IMU readings to serial
+     */
+    void printIMUReadings();
+
+    /**
+     * @brief Test LED strip hardware directly (bypasses power control)
+     */
+    void testLEDStripHardware();
+
+
+
 private:
     void handleDriveInput(const ControllerState& controllerState);
     void handleOuttakeInput(const ControllerState& controllerState);
@@ -101,10 +156,32 @@ private:
 
     // Limit switch debouncing state
     struct LimitSwitchState {
-        int lastState = HIGH;
-        int lastRawReading = HIGH;
+        int lastState = config::constants::LIMIT_SWITCH_NOT_TRIGGERED;
+        int lastRawReading = config::constants::LIMIT_SWITCH_NOT_TRIGGERED;
         unsigned long lastDebounceTime = 0;
     } limitSwitchState;
+
+    // I2C health monitoring state
+    struct I2CHealthState {
+        // PCA9685 health
+        bool pca9685_connected = false;
+        unsigned long pca9685_last_success = 0;
+        unsigned long pca9685_error_count = 0;
+        unsigned long pca9685_response_time_us = 0;
+
+        // MPU6050 health
+        bool mpu6050_connected = false;
+        unsigned long mpu6050_last_success = 0;
+        unsigned long mpu6050_error_count = 0;
+        unsigned long mpu6050_response_time_us = 0;
+
+        // I2C bus health
+        unsigned long i2c_speed_hz = 0;
+        unsigned long last_health_check = 0;
+        bool bus_healthy = true;
+        unsigned long total_transactions = 0;
+        unsigned long failed_transactions = 0;
+    } i2cHealthState;
 
     Motor driveLeft;
     Motor driveRight;

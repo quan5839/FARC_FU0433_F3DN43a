@@ -1,4 +1,2 @@
-#include "memory_pool.h"
-
-// Initialize global memory pools
-MemoryPool<int, config::constants::PWM_CALCULATION_POOL_SIZE> pwm_calculation_pool;
+// UNUSED: Memory pool implementation removed during cleanup
+// This file was not being used anywhere in the codebase

@@ -2,15 +2,20 @@
 #include "src/robot/robot.h"
 #include "src/controller/PS2_controller.h"
 // Note: Other includes are pulled in through robot.h
-
 Robot robot;
-// Note: Removed artificial loop timing - let ESP32 run at maximum natural speed
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(config::constants::SERIAL_BAUD_RATE);
+  delay(config::constants::SERIAL_INIT_DELAY_MS);  // Give serial time to initialize
+  DEBUG_PRINTLN("=== Robot Starting ===");
+  DEBUG_PRINTLN("Serial communication test");
+  DEBUG_PRINT("Baud rate: ");
+  DEBUG_PRINTLN(config::constants::SERIAL_BAUD_RATE);
+
+
 
   // ESP32 Maximum Performance Optimizations
-  setCpuFrequencyMhz(240);                    // Boost CPU to 240MHz (50% faster)
+  setCpuFrequencyMhz(config::performance::ESP32_MAX_CPU_FREQ_MHZ);
 
   robot.init();
   setupPS2();

@@ -1,7 +1,7 @@
 #ifndef CONTROLLER_STATE_H
 #define CONTROLLER_STATE_H
 
-#include <PS2X_lib.h>
+// Removed PS2X_lib.h include - using PsxNewLib instead to avoid conflicts
 
 struct ControllerState {
     // Joysticks

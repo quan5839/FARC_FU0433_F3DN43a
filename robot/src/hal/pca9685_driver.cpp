@@ -22,24 +22,27 @@ void initPCA9685()
   pwm.setPWMFreq(config::constants::PWM_DEFAULT_FREQ); // Use servo frequency as default (servo compatibility required)
 
   DEBUG_PRINT("PCA9685 initialized at ");
-  DEBUG_PRINT(config::pca9685::I2C_CLOCK_SPEED / 1000);
+  DEBUG_PRINT(config::pca9685::I2C_CLOCK_SPEED / config::constants::KILOHERTZ_DIVISOR);
   DEBUG_PRINTLN("kHz I2C speed");
 }
 
 void hal_pca9685_set_pwm(uint8_t channel, uint16_t value) {
   // Input validation
-  if (channel > 15) {
+  if (channel > config::channels::MOTOR_MAX_CHANNEL) {
     ERROR_PRINT("ERROR: Invalid PCA9685 channel ");
     ERROR_PRINT(channel);
-    ERROR_PRINTLN(" (max 15)");
+    ERROR_PRINT(" (max ");
+    ERROR_PRINT(config::channels::MOTOR_MAX_CHANNEL);
+    ERROR_PRINTLN(")");
     return;
   }
 
-  if (value > 4095) {
+  if (value > config::constants::PWM_MAX) {
     DEBUG_PRINT("WARNING: PWM value ");
     DEBUG_PRINT(value);
-    DEBUG_PRINTLN(" clamped to 4095");
-    value = 4095;
+    DEBUG_PRINT(" clamped to ");
+    DEBUG_PRINTLN(config::constants::PWM_MAX);
+    value = config::constants::PWM_MAX;
   }
 
   // Set PWM value - setPWM() doesn't return error codes

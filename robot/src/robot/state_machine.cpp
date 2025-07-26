@@ -1,4 +1,5 @@
 #include "state_machine.h"
+#include "../config.h"
 #include <Arduino.h>
 
 StateMachine::StateMachine() 
@@ -35,12 +36,12 @@ bool StateMachine::isStateTimedOut() const {
 }
 
 void StateMachine::handleTimeout() {
-    Serial.print("State timeout: ");
-    Serial.print(getStateName(_currentState));
-    Serial.print(" after ");
-    Serial.print(millis() - _stateStartTime);
-    Serial.println("ms");
-    
+    ERROR_PRINT("State timeout: ");
+    ERROR_PRINT(getStateName(_currentState));
+    ERROR_PRINT(" after ");
+    ERROR_PRINT(millis() - _stateStartTime);
+    ERROR_PRINTLN("ms");
+
     // Transition to safe state
     setState(config::MANUAL_CONTROL);
 }
@@ -77,8 +78,8 @@ bool StateMachine::isTimedState(config::RobotState state) const {
 }
 
 void StateMachine::logStateTransition(config::RobotState fromState, config::RobotState toState) {
-    Serial.print("State transition: ");
-    Serial.print(getStateName(fromState));
-    Serial.print(" -> ");
-    Serial.println(getStateName(toState));
+    DEBUG_PRINT("State transition: ");
+    DEBUG_PRINT(getStateName(fromState));
+    DEBUG_PRINT(" -> ");
+    DEBUG_PRINTLN(getStateName(toState));
 }

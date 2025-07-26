@@ -29,15 +29,6 @@ public:
     }
 
     /**
-     * @brief Calculate turn offset based on joystick input (optimized with pre-calculated multiplier)
-     * @param joystickX Right joystick X value (-128 to +128)
-     * @return Turn offset value for differential drive
-     */
-    static inline int calculateTurnOffset(int joystickX) {
-        return joystickX * config::tuning::TURN_OFFSET_MULTIPLIER;
-    }
-    
-    /**
      * @brief Get PWM value for outtake motors (pre-calculated for performance)
      * @return PWM value (0-4095) for outtake motor speed
      */
@@ -55,24 +46,23 @@ public:
     }
 
     /**
-     * @brief Validate PWM value is within acceptable range (inlined for performance)
+     * @brief Validate PWM value is within acceptable range
      * @param pwm PWM value to validate
      * @return true if PWM value is valid, false otherwise
      */
-    static inline bool isValidPWM(int pwm) {
+    static bool isValidPWM(int pwm) {
         return (pwm >= -config::constants::PWM_MAX && pwm <= config::constants::PWM_MAX);
     }
     
     /**
-     * @brief Performance-optimized PWM clamping (branchless for maximum speed)
+     * @brief Clamp PWM value to valid range
      * @param pwm PWM value to clamp
      * @return Clamped PWM value within valid range
      */
-    static inline int clampPWM(int pwm) __attribute__((always_inline)) {
-        // Branchless clamping for maximum performance
-        const int max_val = config::constants::PWM_MAX;
-        const int min_val = -config::constants::PWM_MAX;
-        return (pwm > max_val) ? max_val : ((pwm < min_val) ? min_val : pwm);
+    static int clampPWM(int pwm) {
+        if (pwm > config::constants::PWM_MAX) return config::constants::PWM_MAX;
+        if (pwm < -config::constants::PWM_MAX) return -config::constants::PWM_MAX;
+        return pwm;
     }
     
     /**
@@ -127,40 +117,23 @@ public:
         float nonlinearity = config::tuning::CHEESY_DRIVE_NONLINEARITY / 100.0f;
         float wheelNonlinear = wheelNorm * wheelNorm * wheelNorm * nonlinearity + wheelNorm * (1.0f - nonlinearity);
 
-        // Cheesy Drive algorithm
-        float leftMotor, rightMotor;
+        // Apply turn sensitivity and cap the maximum turn rate
+        float turnSensitivity = config::tuning::TURN_SENSITIVITY_PERCENT / 100.0f;
+        float maxTurnRate = turnSensitivity; // Cap turn component at the configured sensitivity level
+        float steeringComponent = wheelNonlinear * turnSensitivity;
 
-        if (abs(throttleNorm) < 0.1f) {
-            // Pure turning when not moving forward/backward
-            leftMotor = wheelNonlinear;
-            rightMotor = -wheelNonlinear;
-        } else {
-            // Compensated turning while driving
-            float sensitivity = 1.0f - abs(throttleNorm) * 0.3f; // Reduce turn sensitivity at high speeds
-            leftMotor = throttleNorm + wheelNonlinear * sensitivity;
-            rightMotor = throttleNorm - wheelNonlinear * sensitivity;
-        }
+        // Clamp steering component to prevent excessive turning
+        if (steeringComponent > maxTurnRate) steeringComponent = maxTurnRate;
+        if (steeringComponent < -maxTurnRate) steeringComponent = -maxTurnRate;
+
+        // Cheesy Drive: maintain forward/backward speed, add/subtract steering
+        float leftMotor = throttleNorm + steeringComponent;
+        float rightMotor = throttleNorm - steeringComponent;
 
         // Convert back to PWM values and clamp
         leftPWM = clampPWM((int)(leftMotor * maxPWM));
         rightPWM = clampPWM((int)(rightMotor * maxPWM));
     }
-
-    /**
-     * @brief Calculate motor speeds using traditional Differential Drive
-     * @param throttle Forward/backward input (-128 to +128)
-     * @param wheel Turning input (-128 to +128)
-     * @param leftPWM Output left motor PWM
-     * @param rightPWM Output right motor PWM
-     * @param maxPWM Maximum PWM value to use
-     */
-    static void calculateDifferentialDrive(int throttle, int wheel, int& leftPWM, int& rightPWM, int maxPWM) {
-        // Traditional differential drive (current method)
-        int turnOffset = calculateTurnOffset(wheel);
-        leftPWM = scaleJoystickToPWM(throttle + turnOffset, maxPWM);
-        rightPWM = scaleJoystickToPWM(throttle - turnOffset, maxPWM);
-    }
-
     /**
      * @brief Apply low-pass filter to reduce joystick jitter
      * @param newValue New input value

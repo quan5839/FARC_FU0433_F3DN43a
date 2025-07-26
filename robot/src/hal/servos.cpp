@@ -18,18 +18,18 @@
 int pulseUsToPwm(int pulse_us) {
   // Calculate the period of one cycle at 50Hz (servo-optimized frequency)
   // Period (us) = 1,000,000 / Frequency (Hz)
-  long cycle_us = 1000000 / config::constants::PWM_DEFAULT_FREQ; // 50Hz = 20000us period
+  long cycle_us = config::constants::MICROSECONDS_PER_SECOND / config::constants::PWM_DEFAULT_FREQ; // 50Hz = 20000us period
 
   // Calculate the 12-bit PWM value that corresponds to the desired pulse width
-  // Value = (pulse_us * 4095) / cycle_us
-  return (pulse_us * 4095L) / cycle_us;
+  // Value = (pulse_us * PWM_MAX) / cycle_us
+  return (pulse_us * config::constants::PWM_MAX) / cycle_us;
 }
 
 void setServoAngle(uint8_t channel, int angle) {
   // Constrain the angle to the valid range
-  angle = constrain(angle, 0, 180);
+  angle = constrain(angle, config::constants::SERVO_MIN_ANGLE, config::constants::SERVO_MAX_ANGLE);
   // Map the angle (0-180) to the standard pulse width (e.g., 500-2500 us)
-  int pulse_us = map(angle, 0, 180, config::servo::MIN_PULSE, config::servo::MAX_PULSE);
+  int pulse_us = map(angle, config::constants::SERVO_MIN_ANGLE, config::constants::SERVO_MAX_ANGLE, config::servo::MIN_PULSE, config::servo::MAX_PULSE);
   // Convert the pulse width to the correct PWM value for the high frequency clock
   int pulse_12bit = pulseUsToPwm(pulse_us);
   hal_pca9685_set_pwm(channel, pulse_12bit);

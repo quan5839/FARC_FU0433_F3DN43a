@@ -1,7 +1,6 @@
 #include "robot.h"
 #include "../hal/servos.h"
 #include "../hal/pca9685_driver.h"
-#include "../hal/esp32_servo.h"
 #include "../controller/PS2_controller.h"
 #include "../utils/pwm_utils.h"
 #include "../utils/safety_monitor.h"
@@ -25,7 +24,18 @@ void Robot::init() {
     SafetyMonitor::init();
 
     initPCA9685();
-    // pinMode(config::LIMIT_SWITCH_PIN, INPUT_PULLUP);
+
+    // Initialize IMU sensor
+    if (config::imu::ENABLE_IMU) {
+        if (IMU::init()) {
+            DEBUG_PRINTLN("IMU initialized successfully");
+        } else {
+            ERROR_PRINTLN("IMU initialization failed - continuing without IMU");
+        }
+    }
+    // Initialize limit switch with pull-up resistor
+    // This ensures disconnected switches read HIGH (safe, not triggered)
+    pinMode(config::LIMIT_SWITCH_PIN, INPUT_PULLUP);
 
     // Initialize state machine
     stateMachine.init();
@@ -33,31 +43,30 @@ void Robot::init() {
     // Initialize servos (setServoAngle already constrains angles to 0-180)
     setServoAngle(config::INTAKE_SERVO_CHANNEL, config::tuning::INTAKE_ARM_CLOSE_ANGLE);
 
-    // Initialize ESP32 direct servo control for outtake (GPIO 18, back pin 12)
-    // ESP32Servo::init(config::OUTTAKE_SERVO_GPIO_PIN, config::servo::LEDC_CHANNEL);
-    // ESP32Servo::setAngle(config::OUTTAKE_SERVO_GPIO_PIN, config::tuning::OUTTAKE_ARM_CLOSE_ANGLE);
+    // Initialize WS2812B LED strip
+    initLEDStrip();
 
-    // SERVO PIN TEST: Output servo signals on multiple pins for testing
-    const int test_pins[] = {0, 2, 4, 5, 16, 17, 18, 19, 23, 25, 26, 33};
-    const int num_pins = sizeof(test_pins) / sizeof(test_pins[0]);
-
-    DEBUG_PRINTLN("=== SERVO PIN TEST MODE ===");
-    for (int i = 0; i < num_pins; i++) {
-        int pin = test_pins[i];
-        if (ledcAttach(pin, 50, 16)) {
-            ledcWrite(pin, config::servo::LEDC_MIN_DUTY); // 90° center position
-            DEBUG_PRINT("GPIO ");
-            DEBUG_PRINT(pin);
-            DEBUG_PRINTLN(" - SERVO ACTIVE");
-        }
-    }
-
-    DEBUG_PRINTLN("Robot initialization complete");
 }
 
 void Robot::loop() {
     // Performance-optimized main loop with branch prediction
     SafetyMonitor::update();
+
+    // Update IMU sensor readings
+    if (config::imu::ENABLE_IMU) {
+        static unsigned long last_imu_update = 0;
+        if (millis() - last_imu_update >= config::imu::UPDATE_INTERVAL_MS) {
+            IMU::update();
+            last_imu_update = millis();
+        }
+    }
+
+    // Periodic I2C health monitoring
+    static unsigned long last_i2c_check = 0;
+    if (millis() - last_i2c_check >= config::performance::I2C_HEALTH_CHECK_INTERVAL_MS) {
+        performI2CHealthCheck();
+        last_i2c_check = millis();
+    }
 
     // Most likely path: system is healthy
     if (UNLIKELY(!SafetyMonitor::isSystemSafe() || !isSystemHealthy())) {
@@ -68,6 +77,16 @@ void Robot::loop() {
     // Most likely path: controller is connected
     if (UNLIKELY(!isConnected())) {
         setRobotState(config::IDLE);
+    }
+
+    // Safety check: repetitive input detection
+    if (UNLIKELY(isRepetitiveInputDetected())) {
+        ERROR_PRINTLN("EMERGENCY: Repetitive input timeout - shutting down robot!");
+        setRobotState(config::IDLE);
+        stopAllMotors();
+        // Reset the detection so robot can be used again after input changes
+        resetRepetitiveInputDetection();
+        return; // Skip normal processing
     }
 
     // Most likely path: no timeout
@@ -114,6 +133,9 @@ void Robot::loop() {
     driveRight.update();
     outtakeLeft.update();
     outtakeRight.update();
+
+    // --- Update LED strip ---
+    updateLEDStrip();
 }
 
 void Robot::processControllerInput(const ControllerState& controllerState) {
@@ -138,9 +160,10 @@ void Robot::handleOuttakeInput(const ControllerState& controllerState) {
         outtakeMotorCommand = -PWMUtils::getOuttakePWM();
     }
 
-    // Safety check: prevent reverse motion if limit switch is triggered
-    if (readLimitSwitch() && outtakeMotorCommand < 0) {
+    // Safety check: prevent reverse motion if limit switch is triggered (unless overridden)
+    if (!config::tuning::LIMIT_SWITCH_DISABLED && readLimitSwitch() && outtakeMotorCommand < 0) {
         outtakeMotorCommand = 0;
+        DEBUG_PRINTLN("Limit switch blocking downward motion - use Right D-pad to override");
     }
 
     setOuttakeMotorSpeeds(outtakeMotorCommand);
@@ -158,11 +181,15 @@ void Robot::handleServoInput(const ControllerState& controllerState) {
 }
 
 void Robot::handleSpecialCommands(const ControllerState& controllerState) {
-    if (controllerState.start_pressed) {
-        config::tuning::INVERT_OUTTAKE_RIGHT = !config::tuning::INVERT_OUTTAKE_RIGHT;
+
+    // I2C health check (START only, no other buttons)
+    if (controllerState.start_pressed && !controllerState.l1_pressed && !controllerState.select_pressed) {
+        performI2CHealthCheck();
     }
     if (controllerState.pad_right_pressed) {
         config::tuning::LIMIT_SWITCH_DISABLED = !config::tuning::LIMIT_SWITCH_DISABLED;
+        DEBUG_PRINT("Limit switch override: ");
+        DEBUG_PRINTLN(config::tuning::LIMIT_SWITCH_DISABLED ? "DISABLED (override active)" : "ENABLED (safety active)");
     }
     if (controllerState.pad_down_pressed) {
         if (!config::tuning::LIMIT_SWITCH_DISABLED) {
@@ -172,11 +199,39 @@ void Robot::handleSpecialCommands(const ControllerState& controllerState) {
     if (controllerState.pad_up_pressed && readLimitSwitch()) {
         timedOuttakeForward();
     }
+
+    // Diagnostic commands
+    if (controllerState.select_pressed && !controllerState.start_pressed) {
+        printI2CDiagnostics();
+    }
+
+    // Performance test (START + SELECT)
+    if (controllerState.start_pressed && controllerState.select_pressed) {
+        testI2CPerformance();
+    }
+
+    // I2C bus scan (L1 + SELECT)
+    if (controllerState.l1_pressed && controllerState.select_pressed) {
+        scanI2CBus();
+    }
+
+    // IMU test (L2 + SELECT)
+    if (controllerState.l2_pressed && controllerState.select_pressed) {
+        DEBUG_PRINTLN("Manual IMU test triggered via controller (L2 + SELECT)");
+        testIMU();
+    }
+
+    // LED strip hardware test (R1 + SELECT)
+    if (controllerState.r1_pressed && controllerState.select_pressed) {
+        DEBUG_PRINTLN("LED strip hardware test triggered via controller (R1 + SELECT)");
+        testLEDStripHardware();
+    }
+
 }
 
 void Robot::automaticOuttakeReverse() {
     setRobotState(config::AUTOMATIC_OUTTAKE_REVERSE);
-    ESP32Servo::setAngle(config::servo::LEDC_CHANNEL, config::tuning::OUTTAKE_ARM_CLOSE_ANGLE);
+    setServoAngle(config::OUTTAKE_SERVO_CHANNEL, config::tuning::OUTTAKE_ARM_CLOSE_ANGLE);
     setServoAngle(config::INTAKE_SERVO_CHANNEL, config::tuning::INTAKE_ARM_CLOSE_ANGLE);
 }
 
@@ -196,16 +251,421 @@ bool Robot::readLimitSwitch() {
     if (config::tuning::LIMIT_SWITCH_DISABLED) {
         return false;
     }
+
+    // Simple, reliable limit switch reading with debouncing
     int reading = digitalRead(config::LIMIT_SWITCH_PIN);
+
+    // Debouncing logic
     if (reading != limitSwitchState.lastRawReading) {
         limitSwitchState.lastDebounceTime = millis();
     }
+
     if ((millis() - limitSwitchState.lastDebounceTime) > config::tuning::DEBOUNCE_DELAY_MS) {
         limitSwitchState.lastState = reading;
     }
+
     limitSwitchState.lastRawReading = reading;
+
+    // With INPUT_PULLUP:
+    // - Connected switch pressed = LOW (triggered)
+    // - Connected switch open = HIGH (not triggered)
+    // - Disconnected switch = HIGH (safe, not triggered)
     return limitSwitchState.lastState == config::constants::LIMIT_SWITCH_TRIGGERED;
 }
+
+void Robot::performI2CHealthCheck() {
+    const unsigned long start_time = micros();
+    i2cHealthState.total_transactions++;
+
+    #if !COMPETITION_MODE
+    Serial.println("=== I2C Health Check ===");
+    #endif
+
+    // Test PCA9685 connection and response time
+    const unsigned long pca_start = micros();
+    Wire.beginTransmission(config::pca9685::I2C_ADDRESS);
+    uint8_t pca_error = Wire.endTransmission();
+    const unsigned long pca_time = micros() - pca_start;
+
+    if (pca_error == 0) {
+        i2cHealthState.pca9685_connected = true;
+        i2cHealthState.pca9685_last_success = millis();
+        i2cHealthState.pca9685_response_time_us = pca_time;
+        #if !COMPETITION_MODE
+        Serial.print("PCA9685: CONNECTED (");
+        Serial.print(pca_time);
+        Serial.println("μs response)");
+        #endif
+    } else {
+        i2cHealthState.pca9685_connected = false;
+        i2cHealthState.pca9685_error_count++;
+        i2cHealthState.failed_transactions++;
+        #if !COMPETITION_MODE
+        Serial.print("PCA9685: DISCONNECTED (error ");
+        Serial.print(pca_error);
+        Serial.println(")");
+        #endif
+    }
+
+    // Test MPU6050 connection and response time (if enabled)
+    if (config::imu::ENABLE_IMU) {
+        // Switch to MPU6050 I2C speed for testing
+        Wire.setClock(config::imu::I2C_CLOCK_SPEED);
+
+        const unsigned long mpu_start = micros();
+        Wire.beginTransmission(config::imu::I2C_ADDRESS);
+        uint8_t mpu_error = Wire.endTransmission();
+        const unsigned long mpu_time = micros() - mpu_start;
+
+        // Restore PCA9685 I2C speed
+        Wire.setClock(config::pca9685::I2C_CLOCK_SPEED);
+
+        if (mpu_error == 0) {
+            i2cHealthState.mpu6050_connected = true;
+            i2cHealthState.mpu6050_last_success = millis();
+            i2cHealthState.mpu6050_response_time_us = mpu_time;
+            #if !COMPETITION_MODE
+            Serial.print("MPU6050: CONNECTED (");
+            Serial.print(mpu_time);
+            Serial.println("μs response)");
+            #endif
+        } else {
+            i2cHealthState.mpu6050_connected = false;
+            i2cHealthState.mpu6050_error_count++;
+            i2cHealthState.failed_transactions++;
+            #if !COMPETITION_MODE
+            Serial.print("MPU6050: DISCONNECTED (error ");
+            Serial.print(mpu_error);
+            Serial.println(")");
+            #endif
+        }
+    } else {
+        #if !COMPETITION_MODE
+        Serial.println("MPU6050: DISABLED");
+        #endif
+    }
+
+    // Update bus health status
+    const float error_rate = (float)i2cHealthState.failed_transactions / i2cHealthState.total_transactions;
+    i2cHealthState.bus_healthy = (error_rate < config::performance::I2C_MAX_ERROR_RATE);
+    i2cHealthState.i2c_speed_hz = config::pca9685::I2C_CLOCK_SPEED;
+    i2cHealthState.last_health_check = millis();
+
+    // Check for slow response times
+    if (i2cHealthState.pca9685_connected &&
+        i2cHealthState.pca9685_response_time_us > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+        #if !COMPETITION_MODE
+        Serial.print("WARNING: PCA9685 slow response (");
+        Serial.print(i2cHealthState.pca9685_response_time_us);
+        Serial.println("μs > 1000μs threshold)");
+        #endif
+    }
+
+    if (config::imu::ENABLE_IMU && i2cHealthState.mpu6050_connected &&
+        i2cHealthState.mpu6050_response_time_us > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+        #if !COMPETITION_MODE
+        Serial.print("WARNING: MPU6050 slow response (");
+        Serial.print(i2cHealthState.mpu6050_response_time_us);
+        Serial.println("μs > 1000μs threshold)");
+        #endif
+    }
+
+    const unsigned long total_time = micros() - start_time;
+    #if !COMPETITION_MODE
+    Serial.print("I2C Health Check completed in ");
+    Serial.print(total_time);
+    Serial.println("μs");
+    Serial.println("========================");
+    #endif
+}
+
+void Robot::printI2CDiagnostics() const {
+    #if !COMPETITION_MODE
+    DEBUG_PRINTLN("=== I2C Diagnostics ===");
+
+    // I2C Bus Configuration
+    DEBUG_PRINT("PCA9685 I2C Speed: ");
+    DEBUG_PRINT(config::pca9685::I2C_CLOCK_SPEED / config::constants::KILOHERTZ_DIVISOR);
+    DEBUG_PRINTLN(" kHz");
+    if (config::imu::ENABLE_IMU) {
+        DEBUG_PRINT("MPU6050 I2C Speed: ");
+        DEBUG_PRINT(config::imu::I2C_CLOCK_SPEED / config::constants::KILOHERTZ_DIVISOR);
+        DEBUG_PRINTLN(" kHz");
+    }
+    DEBUG_PRINTLN("SDA Pin: GPIO 21, SCL Pin: GPIO 22 (VIA v2023 defaults)");
+
+    // Bus Health
+    DEBUG_PRINT("Bus Health: ");
+    DEBUG_PRINTLN(i2cHealthState.bus_healthy ? "HEALTHY" : "UNHEALTHY");
+    DEBUG_PRINT("Total Transactions: ");
+    DEBUG_PRINTLN(i2cHealthState.total_transactions);
+    DEBUG_PRINT("Failed Transactions: ");
+    DEBUG_PRINTLN(i2cHealthState.failed_transactions);
+
+    if (i2cHealthState.total_transactions > 0) {
+        float error_rate = (float)i2cHealthState.failed_transactions / i2cHealthState.total_transactions * config::constants::PERCENT_TO_DECIMAL_DIVISOR;
+        DEBUG_PRINT("Error Rate: ");
+        DEBUG_PRINT(error_rate); // One decimal place
+        DEBUG_PRINTLN("%");
+    }
+
+    // PCA9685 Status
+    Serial.println("--- PCA9685 Motor Controller ---");
+    Serial.print("Address: 0x");
+    Serial.println(config::pca9685::I2C_ADDRESS, HEX);
+    Serial.print("Status: ");
+    Serial.println(i2cHealthState.pca9685_connected ? "CONNECTED" : "DISCONNECTED");
+
+    if (i2cHealthState.pca9685_connected) {
+        Serial.print("Response Time: ");
+        Serial.print(i2cHealthState.pca9685_response_time_us);
+        Serial.println("μs");
+        Serial.print("Last Success: ");
+        Serial.print(millis() - i2cHealthState.pca9685_last_success);
+        Serial.println("ms ago");
+    }
+
+    Serial.print("Error Count: ");
+    Serial.println(i2cHealthState.pca9685_error_count);
+
+    // MPU6050 Status
+    Serial.println("--- MPU6050 IMU Sensor ---");
+    Serial.print("Address: 0x");
+    Serial.println(config::imu::I2C_ADDRESS, HEX);
+    Serial.print("Enabled: ");
+    Serial.println(config::imu::ENABLE_IMU ? "YES" : "NO");
+
+    if (config::imu::ENABLE_IMU) {
+        Serial.print("Status: ");
+        Serial.println(i2cHealthState.mpu6050_connected ? "CONNECTED" : "DISCONNECTED");
+
+        if (i2cHealthState.mpu6050_connected) {
+            Serial.print("Response Time: ");
+            Serial.print(i2cHealthState.mpu6050_response_time_us);
+            Serial.println("μs");
+            Serial.print("Last Success: ");
+            Serial.print(millis() - i2cHealthState.mpu6050_last_success);
+            Serial.println("ms ago");
+        }
+
+        Serial.print("Error Count: ");
+        Serial.println(i2cHealthState.mpu6050_error_count);
+    }
+
+    Serial.println("=======================");
+    #endif
+}
+
+void Robot::testI2CPerformance() {
+    #if !COMPETITION_MODE
+    Serial.println("=== I2C Performance Test ===");
+    Serial.println("Testing I2C speed and stability...");
+
+    const int TEST_ITERATIONS = 100;
+    unsigned long total_time = 0;
+    unsigned long min_time = ULONG_MAX;
+    unsigned long max_time = 0;
+    int successful_transactions = 0;
+
+    // Test PCA9685 performance
+    Serial.print("Testing PCA9685 (");
+    Serial.print(TEST_ITERATIONS);
+    Serial.println(" transactions)...");
+
+    for (int i = 0; i < TEST_ITERATIONS; i++) {
+        const unsigned long start = micros();
+        Wire.beginTransmission(config::pca9685::I2C_ADDRESS);
+        uint8_t error = Wire.endTransmission();
+        const unsigned long duration = micros() - start;
+
+        if (error == 0) {
+            successful_transactions++;
+            total_time += duration;
+            if (duration < min_time) min_time = duration;
+            if (duration > max_time) max_time = duration;
+        }
+
+        // Small delay between transactions
+        delayMicroseconds(100);
+    }
+
+    // Calculate statistics
+    if (successful_transactions > 0) {
+        const float avg_time = (float)total_time / successful_transactions;
+        const float success_rate = (float)successful_transactions / TEST_ITERATIONS * 100;
+
+        DEBUG_PRINT("PCA9685 Results:");
+        DEBUG_PRINT(" Success Rate: ");
+        DEBUG_PRINT(success_rate);
+        DEBUG_PRINTLN("%");
+        DEBUG_PRINT("  Average Time: ");
+        DEBUG_PRINT(avg_time);
+        DEBUG_PRINTLN("μs");
+        DEBUG_PRINT("  Min Time: ");
+        DEBUG_PRINT(min_time);
+        DEBUG_PRINTLN("μs");
+        DEBUG_PRINT("  Max Time: ");
+        DEBUG_PRINT(max_time);
+        DEBUG_PRINTLN("μs");
+
+        // Performance analysis
+        if (avg_time > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+            ERROR_PRINTLN("WARNING: Average response time exceeds threshold!");
+        }
+        if (success_rate < 95.0) {
+            Serial.println("WARNING: Low success rate indicates I2C issues!");
+        }
+        if (max_time > avg_time * 3) {
+            Serial.println("WARNING: High response time variance detected!");
+        }
+    } else {
+        Serial.println("PCA9685: NO SUCCESSFUL TRANSACTIONS!");
+    }
+    #endif
+
+    #if !COMPETITION_MODE
+    // Test MPU6050 performance (if enabled)
+    if (config::imu::ENABLE_IMU) {
+        Serial.println("Testing MPU6050...");
+
+        // Switch to MPU6050 I2C speed for testing
+        Wire.setClock(config::imu::I2C_CLOCK_SPEED);
+        Serial.print("MPU6050 I2C speed: ");
+        Serial.print(config::imu::I2C_CLOCK_SPEED / 1000);
+        Serial.println("kHz");
+
+        // Reset counters
+        total_time = 0;
+        min_time = ULONG_MAX;
+        max_time = 0;
+        successful_transactions = 0;
+
+        for (int i = 0; i < TEST_ITERATIONS; i++) {
+            const unsigned long start = micros();
+            Wire.beginTransmission(config::imu::I2C_ADDRESS);
+            uint8_t error = Wire.endTransmission();
+            const unsigned long duration = micros() - start;
+
+            if (error == 0) {
+                successful_transactions++;
+                total_time += duration;
+                if (duration < min_time) min_time = duration;
+                if (duration > max_time) max_time = duration;
+            }
+
+            delayMicroseconds(100);
+        }
+
+        if (successful_transactions > 0) {
+            const float avg_time = (float)total_time / successful_transactions;
+            const float success_rate = (float)successful_transactions / TEST_ITERATIONS * 100;
+
+            Serial.print("MPU6050 Results:");
+            Serial.print(" Success Rate: ");
+            Serial.print(success_rate, 1);
+            Serial.println("%");
+            Serial.print("  Average Time: ");
+            Serial.print(avg_time, 1);
+            Serial.println("μs");
+            Serial.print("  Min Time: ");
+            Serial.print(min_time);
+            Serial.println("μs");
+            Serial.print("  Max Time: ");
+            Serial.print(max_time);
+            Serial.println("μs");
+        } else {
+            Serial.println("MPU6050: NO SUCCESSFUL TRANSACTIONS!");
+        }
+
+        // Restore PCA9685 I2C speed after MPU6050 testing
+        Wire.setClock(config::pca9685::I2C_CLOCK_SPEED);
+        Serial.print("I2C speed restored to ");
+        Serial.print(config::pca9685::I2C_CLOCK_SPEED / 1000);
+        Serial.println("kHz for PCA9685");
+    }
+
+    // I2C Bus Speed Analysis
+    Serial.println("--- I2C Bus Analysis ---");
+    Serial.print("PCA9685 Speed: ");
+    Serial.print(config::pca9685::I2C_CLOCK_SPEED / 1000);
+    Serial.println(" kHz");
+    if (config::imu::ENABLE_IMU) {
+        Serial.print("MPU6050 Speed: ");
+        Serial.print(config::imu::I2C_CLOCK_SPEED / 1000);
+        Serial.println(" kHz");
+    }
+    Serial.println("VIA v2023 Board: 1kΩ pull-ups (optimal for 1MHz)");
+    Serial.print("Pull-up Recommendation: ");
+    if (config::pca9685::I2C_CLOCK_SPEED >= 1000000) {
+        Serial.println("OPTIMAL (1kΩ for 1MHz)");
+    } else {
+        Serial.println("CONSERVATIVE (could use 1MHz)");
+    }
+
+    Serial.println("============================");
+    #endif
+}
+
+void Robot::scanI2CBus() {
+    #if !COMPETITION_MODE
+    DEBUG_PRINTLN("=== I2C Bus Scanner ===");
+    DEBUG_PRINTLN("Scanning I2C bus for devices...");
+
+    int devices_found = 0;
+
+    // Test both I2C speeds
+    const long speeds[] = {400000, 1000000};
+    const char* speed_names[] = {"400kHz", "1MHz"};
+
+    for (int speed_idx = 0; speed_idx < 2; speed_idx++) {
+        Wire.setClock(speeds[speed_idx]);
+        Serial.print("\nScanning at ");
+        Serial.print(speed_names[speed_idx]);
+        Serial.println(":");
+
+        for (uint8_t address = 1; address < 127; address++) {
+            Wire.beginTransmission(address);
+            uint8_t error = Wire.endTransmission();
+
+            if (error == 0) {
+                DEBUG_PRINT("Device found at address 0x");
+                if (address < 16) DEBUG_PRINT("0");
+                DEBUG_PRINT(address);
+
+                // Identify known devices
+                if (address == 0x40) {
+                    DEBUG_PRINT(" (PCA9685 Motor Controller)");
+                } else if (address == 0x68) {
+                    DEBUG_PRINT(" (MPU6050 IMU - CONFIGURED ADDRESS)");
+                } else if (address == 0x69) {
+                    DEBUG_PRINT(" (MPU6050 IMU - Alternative Address)");
+                } else {
+                    DEBUG_PRINT(" (Unknown Device)");
+                }
+                DEBUG_PRINTLN();
+                devices_found++;
+            }
+
+            delay(1); // Small delay between scans
+        }
+    }
+
+    // Restore PCA9685 speed
+    Wire.setClock(config::pca9685::I2C_CLOCK_SPEED);
+
+    Serial.print("\nScan complete. Found ");
+    Serial.print(devices_found);
+    Serial.println(" device(s).");
+
+    if (devices_found == 0) {
+        Serial.println("No I2C devices found. Check wiring and pull-up resistors.");
+    }
+
+    Serial.println("=======================");
+    #endif
+}
+
+
 
 // Helper function implementations (PWM utilities now handle input processing)
 
@@ -219,13 +679,8 @@ void Robot::calculateDriveMotorSpeeds(const ControllerState& controllerState, in
     processJoystickInputs(controllerState, processedY, processedX);
 
     // Calculate motor speeds using selected drive style
-    if (config::tuning::USE_CHEESY_DRIVE) {
-        // Cheesy Drive: maintains forward speed while turning
-        PWMUtils::calculateCheesyDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
-    } else {
-        // Traditional Differential Drive
-        PWMUtils::calculateDifferentialDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
-    }
+    PWMUtils::calculateCheesyDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
+
 }
 
 void Robot::processJoystickInputs(const ControllerState& controllerState, int& processedY, int& processedX) {
@@ -279,11 +734,9 @@ void Robot::coastAllMotors() {
 }
 
 bool Robot::detectTurningMovement(int leftPWM, int rightPWM) {
-    // Performance-optimized turning detection with fast math
-    const int speed_difference = FAST_ABS(leftPWM - rightPWM);
-
-    // Use bit shifting for division by 2 (faster than division)
-    const int average_speed = (FAST_ABS(leftPWM) + FAST_ABS(rightPWM)) >> 1;
+    // Calculate speed difference and average for turn detection
+    const int speed_difference = abs(leftPWM - rightPWM);
+    const int average_speed = (abs(leftPWM) + abs(rightPWM)) / 2;
 
     // Use pre-computed multiplier for percentage conversion
     const int difference_percent = (speed_difference * config::performance::PWM_TO_PERCENT_MULTIPLIER);
@@ -307,12 +760,8 @@ bool Robot::handleServoToggle(uint8_t channel, bool& toggleState, int openAngle,
     toggleState = !toggleState;
     int targetAngle = toggleState ? openAngle : closeAngle;
 
-    // Use ESP32 servo for outtake, PCA9685 for others
-    if (channel == config::OUTTAKE_SERVO_CHANNEL) {
-        ESP32Servo::setAngle(config::OUTTAKE_SERVO_GPIO_PIN, targetAngle);
-    } else {
-        setServoAngle(channel, targetAngle);
-    }
+    // Use PCA9685 for all servos
+    setServoAngle(channel, targetAngle);
     return true;
 }
 
@@ -377,4 +826,190 @@ bool Robot::isSystemHealthy() {
     }
 
     return true;
+}
+
+// WS2812B LED Strip Control Functions
+void Robot::initLEDStrip() {
+    if (WS2812BStrip::init()) {
+        DEBUG_PRINTLN("WS2812B LED strip initialized successfully");
+
+        // Test the LED strip on startup
+        DEBUG_PRINTLN("Testing LED strip - red for 2 seconds");
+        WS2812BStrip::powerOn();
+        WS2812BStrip::setSolidColor(255, 0, 0); // Red
+        WS2812BStrip::show();
+        delay(2000);
+
+        DEBUG_PRINTLN("Testing LED strip - green for 2 seconds");
+        WS2812BStrip::setSolidColor(0, 255, 0); // Green
+        WS2812BStrip::show();
+        delay(2000);
+
+        DEBUG_PRINTLN("Testing LED strip - blue for 2 seconds");
+        WS2812BStrip::setSolidColor(0, 0, 255); // Blue
+        WS2812BStrip::show();
+        delay(2000);
+
+        DEBUG_PRINTLN("LED strip test complete - starting normal operation");
+        WS2812BStrip::clear();
+        WS2812BStrip::show();
+    } else {
+        ERROR_PRINTLN("WS2812B LED strip initialization failed");
+    }
+}
+
+void Robot::updateLEDStrip() {
+    // Update LED strip based on current robot state
+    config::RobotState currentState = stateMachine.getCurrentState();
+
+    // Enable power for active states, disable for off states
+    bool should_be_powered = false;
+
+    switch (currentState) {
+        case config::IDLE:
+            WS2812BStrip::setRobotStatus(1); // Idle - blue breathing
+            should_be_powered = true;
+            break;
+        case config::MANUAL_CONTROL:
+            WS2812BStrip::setRobotStatus(2); // Manual - solid green
+            should_be_powered = true;
+            break;
+        case config::AUTOMATIC_OUTTAKE_REVERSE:
+        case config::TIMED_OUTTAKE_FORWARD:
+            WS2812BStrip::setRobotStatus(3); // Auto - rainbow
+            should_be_powered = true;
+            break;
+        default:
+            WS2812BStrip::setRobotStatus(0); // Off
+            should_be_powered = false;
+            break;
+    }
+
+    // Check for error conditions
+    if (!isSystemHealthy() || !SafetyMonitor::isSystemSafe()) {
+        WS2812BStrip::setRobotStatus(4); // Error - red blinking
+        should_be_powered = true; // Show error even if system is unhealthy
+    }
+
+    // Control power based on state
+    if (should_be_powered && !WS2812BStrip::isPowerOn()) {
+        WS2812BStrip::powerOn();
+    } else if (!should_be_powered && WS2812BStrip::isPowerOn()) {
+        WS2812BStrip::powerOff();
+    }
+
+    // Update the strip
+    WS2812BStrip::update();
+}
+
+void Robot::enableLEDStrip() {
+    WS2812BStrip::powerOn();
+    DEBUG_PRINTLN("LED strip power enabled");
+}
+
+void Robot::disableLEDStrip() {
+    WS2812BStrip::powerOff();
+    DEBUG_PRINTLN("LED strip power disabled");
+}
+
+// IMU Testing Functions
+void Robot::testIMU() {
+    DEBUG_PRINTLN("=== IMU TEST START ===");
+
+    if (!config::imu::ENABLE_IMU) {
+        DEBUG_PRINTLN("IMU is disabled in config - enable it to test");
+        return;
+    }
+
+    // Check if IMU is connected
+    if (!IMU::isConnected()) {
+        ERROR_PRINTLN("IMU not connected! Check wiring:");
+        ERROR_PRINTLN("- SDA: GPIO 21");
+        ERROR_PRINTLN("- SCL: GPIO 22");
+        ERROR_PRINTLN("- VCC: 3.3V or 5V");
+        ERROR_PRINTLN("- GND: Ground");
+        ERROR_PRINTLN("- I2C Address: 0x68 (or 0x69 if AD0 is high)");
+        return;
+    }
+
+    DEBUG_PRINTLN("IMU connected successfully!");
+    DEBUG_PRINTLN("Testing IMU for 10 seconds...");
+    DEBUG_PRINTLN("Try moving and rotating the robot to see readings change");
+    DEBUG_PRINTLN("");
+
+    // Reset heading for testing
+    IMU::resetHeading();
+
+    // Test for 10 seconds
+    unsigned long test_start = millis();
+    unsigned long last_print = 0;
+
+    while (millis() - test_start < 10000) { // 10 seconds
+        // Update IMU readings
+        if (IMU::update()) {
+            // Print readings every 500ms
+            if (millis() - last_print >= 500) {
+                printIMUReadings();
+                last_print = millis();
+            }
+        } else {
+            ERROR_PRINTLN("Failed to read IMU data");
+        }
+
+        delay(10); // Small delay
+    }
+
+    DEBUG_PRINTLN("=== IMU TEST COMPLETE ===");
+}
+
+void Robot::printIMUReadings() {
+    float accel_x, accel_y, accel_z;
+    float gyro_x, gyro_y, gyro_z;
+    float temperature;
+    float heading;
+
+    // Get all IMU readings
+    IMU::getAcceleration(accel_x, accel_y, accel_z);
+    IMU::getRotation(gyro_x, gyro_y, gyro_z);
+    temperature = IMU::getTemperature();
+    heading = IMU::getHeading();
+
+    // Print formatted readings
+    DEBUG_PRINT("Accel(m/s²): X=");
+    DEBUG_PRINT(accel_x);
+    DEBUG_PRINT(" Y=");
+    DEBUG_PRINT(accel_y);
+    DEBUG_PRINT(" Z=");
+    DEBUG_PRINT(accel_z);
+
+    DEBUG_PRINT(" | Gyro(°/s): X=");
+    DEBUG_PRINT(gyro_x * 180.0 / PI); // Convert rad/s to deg/s
+    DEBUG_PRINT(" Y=");
+    DEBUG_PRINT(gyro_y * 180.0 / PI);
+    DEBUG_PRINT(" Z=");
+    DEBUG_PRINT(gyro_z * 180.0 / PI);
+
+    DEBUG_PRINT(" | Temp: ");
+    DEBUG_PRINT(temperature);
+    DEBUG_PRINT("°C");
+
+    DEBUG_PRINT(" | Heading: ");
+    DEBUG_PRINT(heading);
+    DEBUG_PRINT("°");
+
+    // Movement detection
+    if (IMU::isMoving()) {
+        DEBUG_PRINT(" [MOVING]");
+    }
+    if (IMU::isTurning()) {
+        DEBUG_PRINT(" [TURNING]");
+    }
+
+    DEBUG_PRINTLN("");
+}
+
+void Robot::testLEDStripHardware() {
+    DEBUG_PRINTLN("Starting LED strip hardware test...");
+    WS2812BStrip::directHardwareTest();
+    DEBUG_PRINTLN("LED strip hardware test complete");
 }
