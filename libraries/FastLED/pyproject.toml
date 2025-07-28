@@ -1,0 +1,58 @@
+[project]
+name = "ci"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "platformio==6.1.18",
+    "python-dateutil",
+    "ruff",
+    "pyright",
+    "types-python-dateutil",
+    "clang-format",
+    "pip",
+    "pytest",
+    "pytest-xdist",
+    "fpvgcc",
+    "uv",
+    "ziglang",
+    "ninja",
+    "cmake",
+    "download",
+    "playwright",
+    "download",
+    "httpx",
+    "pytest-xdist",
+    "fastled>=1.4.30",
+    "sccache>=0.10.0",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-requirements-txt"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+
+[tool.hatch.build]
+packages = ["ci/ci"]
+
+[tool.ruff]
+exclude = ["ci/tmp", "ci/wasm"]
+
+[tool.ruff.lint]
+# Enable import sorting (replaces isort)
+select = ["I"]
+
+[tool.ruff.lint.isort]
+# Configure import sorting to match isort's black profile
+force-single-line = false
+force-sort-within-sections = false
+lines-after-imports = 2
+
+[tool.ruff.format]
+# Enable formatting (replaces black)
+# Use black-compatible settings
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

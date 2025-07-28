@@ -1,13 +1,17 @@
 #ifndef ROBOT_H
 #define ROBOT_H
 
-#include "../hal/motor.h"
-#include "../hal/imu.h"
-#include "../hal/ws2812b_strip.h"
+#include "../hal/motor.h" // Use relative path for linter compatibility
+#include "../hal/imu.h"   // IMU sensor support
+#include "../hal/ws2812b_strip.h" // WS2812B LED strip control
+// NOTE: Linter errors about includes can be ignored; code compiles with Arduino CLI/IDE.
 #include "../config.h"
 #include "../controller/controller_state.h"
 #include "state_machine.h"
-#include <stdint.h>
+#include <stdint.h> // For uint8_t, etc. (linter compatibility)
+#ifndef HIGH
+#define HIGH 1
+#endif
 
 /**
  * @class Robot
@@ -154,12 +158,16 @@ private:
     void resetErrorCounter();
     bool isSystemHealthy();
 
+
+
     // Limit switch debouncing state
     struct LimitSwitchState {
-        int lastState = config::constants::LIMIT_SWITCH_NOT_TRIGGERED;
-        int lastRawReading = config::constants::LIMIT_SWITCH_NOT_TRIGGERED;
+        int lastState = HIGH;
+        int lastRawReading = HIGH;
         unsigned long lastDebounceTime = 0;
     } limitSwitchState;
+
+
 
     // I2C health monitoring state
     struct I2CHealthState {

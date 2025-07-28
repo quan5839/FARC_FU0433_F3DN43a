@@ -15,21 +15,24 @@ namespace config {
     constexpr int PWM_MAX = 4095;                    // Maximum PWM value (100% duty cycle)
     constexpr int PWM_DEFAULT_FREQ = 50;             // Unified frequency (servo-limited)
 
+    // Time constants
+    constexpr long MICROSECONDS_PER_SECOND = 1000000L; // 1 second = 1,000,000 microseconds
+
+    // Unit conversion constants
+    constexpr int KILOHERTZ_DIVISOR = 1000;          // Convert Hz to kHz
+
+    // Servo angle limits
+    constexpr int SERVO_MIN_ANGLE = 0;               // Minimum servo angle (degrees)
+    constexpr int SERVO_MAX_ANGLE = 180;             // Maximum servo angle (degrees)
+
     // Mathematical constants
     constexpr int PERCENT_TO_DECIMAL_DIVISOR = 100;
     constexpr int QUARTER_DIVISOR = 4;
-    constexpr int KILOHERTZ_DIVISOR = 1000;
-    constexpr long MICROSECONDS_PER_SECOND = 1000000;
     constexpr int MAX_CONSECUTIVE_ERRORS = 5;
-
-    // Servo constants
-    constexpr int SERVO_MIN_ANGLE = 0;
-    constexpr int SERVO_MAX_ANGLE = 180;
 
     // Communication
     constexpr int SERIAL_BAUD_RATE = 115200;
     constexpr unsigned long PS2_RETRY_DELAY_MS = 25;
-    constexpr unsigned long SERIAL_INIT_DELAY_MS = 1000;
 
     // Motor control
     constexpr bool MOTOR_NOT_INVERTED = false;
@@ -37,7 +40,6 @@ namespace config {
 
     // Sensor constants
     constexpr int LIMIT_SWITCH_TRIGGERED = 0;        // LOW when triggered (INPUT_PULLUP)
-    constexpr int LIMIT_SWITCH_NOT_TRIGGERED = 1;    // HIGH when not triggered (INPUT_PULLUP)
 
     // Safety constants
     constexpr unsigned long TIMEOUT_SAFETY_MARGIN_MS = 1000;
@@ -47,6 +49,14 @@ namespace config {
     constexpr unsigned long WATCHDOG_FEED_INTERVAL_MS = 1000;
     constexpr unsigned long WATCHDOG_TIMEOUT_MS = 5000;
     constexpr unsigned long SAFETY_CHECK_INTERVAL_MS = 5000;
+
+    // Controller input safety constants
+    constexpr bool ENABLE_CONTROLLER_INPUT_SAFETY = true;
+    constexpr unsigned long CONTROLLER_INPUT_SAFETY_TIMEOUT_MS = 5000;  // 5 seconds
+    constexpr int CONTROLLER_INPUT_CHANGE_THRESHOLD = 2;  // Minimum change to detect input variation
+
+    // Memory optimization constants
+    constexpr size_t PWM_CALCULATION_POOL_SIZE = 4;
   }
 
 // ===== COMPETITION MODE TOGGLE =====
@@ -99,8 +109,8 @@ namespace config {
     constexpr uint8_t ATT_PIN  = 15;  // CS (Chip Select) - PS2 Attention/Select
     // Legacy pin names for compatibility (not used by PsxNewLib)
     constexpr uint8_t SEL_PIN  = ATT_PIN;  // Alias for ATT_PIN
-    constexpr int JOYSTICK_DEADZONE = 1;   // Dead zone for joystick inputs
-    constexpr int JOYSTICK_MAX = 128;      // Maximum joystick value (PS2 controller range)
+    constexpr int JOYSTICK_DEADZONE = 1; // Dead zone for joystick inputs (0-128 range)
+    constexpr int JOYSTICK_MAX = 128; // Maximum joystick value after processing
   }
 
 
@@ -110,6 +120,11 @@ namespace config {
     constexpr int MIN_PULSE = 500;
     constexpr int MAX_PULSE = 2500;
 
+    // ESP32 LEDC servo control (for future use)
+    constexpr int LEDC_FREQUENCY = 50;        // 50Hz for servo compatibility
+    constexpr int LEDC_RESOLUTION = 16;       // 16-bit resolution (0-65535)
+    constexpr int LEDC_MIN_DUTY = 1638;       // ~500us pulse (1638/65535 * 20ms)
+    constexpr int LEDC_MAX_DUTY = 8192;       // ~2500us pulse (8192/65535 * 20ms)
   }
 
   // Note: PWM frequency constants moved to constants namespace to eliminate duplication
@@ -117,13 +132,18 @@ namespace config {
   // -- PCA9685 Driver --
   namespace pca9685 {
     constexpr int OSCILLATOR_FREQ = 27000000;               // PCA9685 internal oscillator frequency (27MHz)
-    constexpr long I2C_CLOCK_SPEED = 1000000;
+    constexpr long I2C_CLOCK_SPEED = 1000000;               // 1MHZ
     constexpr uint8_t I2C_ADDRESS = 0x40;                   // PCA9685 default I2C address (7-bit)
+
+    // Hardware-specific constants
+    constexpr int OSCILLATOR_FREQ_MHZ = 27;                 // Oscillator frequency in MHz for readability
+    constexpr uint8_t DEFAULT_I2C_ADDRESS = 0x40;           // Default factory I2C address
   }
 
   // -- MPU6050 IMU --
   namespace imu {
     constexpr uint8_t I2C_ADDRESS = 0x68;                   // MPU6050 default I2C address
+    constexpr uint8_t I2C_ADDRESS_ALT = 0x69;               // MPU6050 alternative I2C address
     constexpr long I2C_CLOCK_SPEED = 400000;                // MPU6050 I2C speed (400kHz - most reliable)
     constexpr bool ENABLE_IMU = false;                       // Enable IMU functionality
     constexpr unsigned long UPDATE_INTERVAL_MS = 10;       // Update IMU every 10ms (100Hz)
@@ -174,9 +194,11 @@ namespace config {
   // Maximum performance settings for competition robotics
   //================================================================================
   namespace performance {
+    // -- CPU Performance --
+    constexpr int ESP32_MAX_CPU_FREQ_MHZ = 240; // Maximum ESP32 CPU frequency for optimal performance
+
     // -- Loop Timing --
     constexpr unsigned long TARGET_LOOP_TIME_US = 1000; // Target 1ms loop time (1000Hz)
-    constexpr int ESP32_MAX_CPU_FREQ_MHZ = 240;          // Maximum ESP32 CPU frequency
 
     // -- Performance Constants --
     constexpr float PWM_TO_PERCENT_MULTIPLIER = 100.0f / constants::PWM_MAX;
@@ -186,12 +208,7 @@ namespace config {
     #define LIKELY(x) __builtin_expect(!!(x), 1)
     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-    // -- I2C Health Monitoring --
-    constexpr unsigned long I2C_HEALTH_CHECK_INTERVAL_MS = 10000;
-    constexpr unsigned long I2C_RESPONSE_TIMEOUT_US = 1000;
-    constexpr float I2C_MAX_ERROR_RATE = 0.1;
-    constexpr unsigned int I2C_TIMEOUT_MS = 100;
-    constexpr bool ENABLE_STANDARD_I2C_RECOVERY = true;
+
   }
 
   //================================================================================
@@ -200,20 +217,18 @@ namespace config {
   //================================================================================
   namespace tuning {
     // -- Drive Control Performance --
-    constexpr int DRIVE_MAX_SPEED_PERCENT    = 100; // Maximum speed for normal driving (0-100%)
+    constexpr int DRIVE_MAX_SPEED_PERCENT    = 90; // Maximum speed for normal driving (0-100%)
     constexpr int DRIVE_PRECISION_SPEED_PERCENT = 17; // Maximum speed for precision mode when R1 pressed (0-100%)
     constexpr int TURN_SENSITIVITY_PERCENT   = 35; // Turn sensitivity - higher = more responsive turning (0-100%)
 
     // Pre-calculated PWM values for performance optimization
-    constexpr int DRIVE_MAX_SPEED_PWM = (constants::PWM_MAX * DRIVE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;        // 2252 PWM units
-    constexpr int DRIVE_PRECISION_PWM = (constants::PWM_MAX * DRIVE_PRECISION_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;  // 819 PWM units
+    constexpr int DRIVE_MAX_SPEED_PWM = (constants::PWM_MAX * DRIVE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;        // 3685 PWM units (90%)
+    constexpr int DRIVE_PRECISION_PWM = (constants::PWM_MAX * DRIVE_PRECISION_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;  // 696 PWM units (17%)
 
     // -- Outtake Motor Settings (Independent from Drive) --
     constexpr int OUTTAKE_MAX_SPEED_PERCENT = 100;  // Outtake motors always run at full power (0-100%)
     constexpr int OUTTAKE_PWM = (constants::PWM_MAX * OUTTAKE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;              // 4095 PWM units (full power)
-
-    // -- Drive Control Style --
-    constexpr int CHEESY_DRIVE_NONLINEARITY = 25; // Cheesy drive turning feel (0-100%)
+    constexpr int OUTTAKE_HOLD_POWER_PERCENT = 10;  // Forward holding power to prevent rolling back (0-100%)
 
     // -- Motor Braking Configuration --
     constexpr bool ENABLE_ACTIVE_BRAKING = true;
@@ -229,7 +244,7 @@ namespace config {
     // -- Motor Ramping --
     constexpr bool ENABLE_MOTOR_RAMPING = true;
     constexpr int ACCELERATION_TIME_MS = 300;
-    constexpr int DECELERATION_TIME_MS = 200;
+    constexpr int DECELERATION_TIME_MS = 100;
 
 
 
@@ -239,7 +254,7 @@ namespace config {
     constexpr int OUTTAKE_FORWARD_TIMEOUT_MS = 1500;
 
     // -- Servo Angles --
-    constexpr int INTAKE_ARM_CLOSE_ANGLE = 135;
+    constexpr int INTAKE_ARM_CLOSE_ANGLE = 140;
     constexpr int INTAKE_ARM_OPEN_ANGLE = 45;
     constexpr int OUTTAKE_ARM_OPEN_ANGLE = 145;
     constexpr int OUTTAKE_ARM_CLOSE_ANGLE = 45;
@@ -255,9 +270,7 @@ namespace config {
     constexpr int CONNECTION_TIMEOUT_MS = 1000;
     constexpr int RECONNECTION_ATTEMPT_INTERVAL_MS = 1000;
 
-    // -- Repetitive Input Safety --
-    constexpr unsigned long REPETITIVE_INPUT_TIMEOUT_MS = 5000;  // 5 seconds of same input triggers shutdown
-    constexpr int REPETITIVE_INPUT_THRESHOLD = 5;               // Minimum change required to reset timer (PWM units)
+
 
     // -- WS2812B LED Strip Settings --
     constexpr uint8_t WS2812B_BRIGHTNESS = 128;                 // Global brightness (0-255, 50% for safety)
@@ -265,7 +278,7 @@ namespace config {
     constexpr uint8_t WS2812B_DEFAULT_HUE = 120;                // Default hue (green)
     constexpr uint8_t WS2812B_DEFAULT_SAT = 255;                // Default saturation (full)
     constexpr uint8_t WS2812B_DEFAULT_VAL = 128;                // Default value/brightness
-    constexpr int WS2812B_POWER_ON_PWM = constants::PWM_MAX;    // Full PWM to enable power via PCA9685
+    constexpr int WS2812B_POWER_ON_PWM = 4095;                  // Full PWM to enable power via PCA9685
     constexpr int WS2812B_POWER_OFF_PWM = 0;                    // Zero PWM to disable power via PCA9685
 
 

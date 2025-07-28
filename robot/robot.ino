@@ -2,17 +2,16 @@
 #include "src/robot/robot.h"
 #include "src/controller/PS2_controller.h"
 // Note: Other includes are pulled in through robot.h
+
 Robot robot;
 
 void setup() {
   Serial.begin(config::constants::SERIAL_BAUD_RATE);
-  delay(config::constants::SERIAL_INIT_DELAY_MS);  // Give serial time to initialize
+  delay(1000);  // Give serial time to initialize
   DEBUG_PRINTLN("=== Robot Starting ===");
   DEBUG_PRINTLN("Serial communication test");
   DEBUG_PRINT("Baud rate: ");
   DEBUG_PRINTLN(config::constants::SERIAL_BAUD_RATE);
-
-
 
   // ESP32 Maximum Performance Optimizations
   setCpuFrequencyMhz(config::performance::ESP32_MAX_CPU_FREQ_MHZ);

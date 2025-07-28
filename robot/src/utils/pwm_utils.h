@@ -113,14 +113,10 @@ public:
         float throttleNorm = (float)throttle / config::ps2::JOYSTICK_MAX;
         float wheelNorm = (float)wheel / config::ps2::JOYSTICK_MAX;
 
-        // Apply nonlinearity to wheel for better feel
-        float nonlinearity = config::tuning::CHEESY_DRIVE_NONLINEARITY / 100.0f;
-        float wheelNonlinear = wheelNorm * wheelNorm * wheelNorm * nonlinearity + wheelNorm * (1.0f - nonlinearity);
-
-        // Apply turn sensitivity and cap the maximum turn rate
+        // Apply turn sensitivity (pure arcade drive - no nonlinearity)
         float turnSensitivity = config::tuning::TURN_SENSITIVITY_PERCENT / 100.0f;
         float maxTurnRate = turnSensitivity; // Cap turn component at the configured sensitivity level
-        float steeringComponent = wheelNonlinear * turnSensitivity;
+        float steeringComponent = wheelNorm * turnSensitivity;
 
         // Clamp steering component to prevent excessive turning
         if (steeringComponent > maxTurnRate) steeringComponent = maxTurnRate;

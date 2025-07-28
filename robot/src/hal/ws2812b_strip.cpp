@@ -46,7 +46,8 @@ namespace WS2812BStrip {
         powerOff();
         
         initialized = true;
-        DEBUG_PRINTLN("WS2812B LED strip initialized on GPIO 19");
+        DEBUG_PRINT("WS2812B LED strip initialized on GPIO ");
+        DEBUG_PRINTLN(config::WS2812B_DATA_PIN);
         return true;
     }
     

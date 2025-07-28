@@ -23,8 +23,4 @@ const ControllerState& getControllerState();
 // Connection monitoring functions
 bool isConnected();
 
-// Repetitive input safety functions
-bool isRepetitiveInputDetected();
-void resetRepetitiveInputDetection();
-
 #endif // PS2_CONTROLLER_H

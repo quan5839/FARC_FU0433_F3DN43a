@@ -32,6 +32,9 @@ public:
     void coast();  // Coast to stop (disable active braking)
     void update();
 
+    // Getter methods
+    int getCurrentPWM() const { return _current_pwm; }
+
 private:
     void updateBraking();
     void updateRamping();
