@@ -154,6 +154,11 @@ private:
     // Track if controls are locked to outtake only (SELECT button mode)
     bool controlsLockedToOuttake;
 
+    // Homing sequence state variables
+    bool homingComplete;
+    unsigned long homingStartTime;
+    unsigned long homingPhaseStartTime;
+
     // Error handling and recovery
     int _consecutive_errors = 0;
     unsigned long _last_error_time = 0;
@@ -162,6 +167,14 @@ private:
     void handleSystemError();
     void resetErrorCounter();
     bool isSystemHealthy();
+
+    // Homing sequence functions (3D printer style)
+    void startHomingSequence();
+    void updateHomingFastApproach();
+    void updateHomingRetraction();
+    void updateHomingSlowApproach();
+    void updateHomingFinalPosition();
+    bool isHomingComplete() const;
 
 
 

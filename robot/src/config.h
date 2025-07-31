@@ -95,7 +95,13 @@ namespace config {
     IDLE,
     MANUAL_CONTROL,
     AUTOMATIC_OUTTAKE_REVERSE,
-    TIMED_OUTTAKE_FORWARD
+    TIMED_OUTTAKE_FORWARD,
+    // Homing sequence states (3D printer style)
+    HOMING_FAST_APPROACH,
+    HOMING_RETRACTION,
+    HOMING_SLOW_APPROACH,
+    HOMING_FINAL_POSITION,
+    HOMING_COMPLETE
   };
 
   // -- PS2 Controller --
@@ -201,6 +207,11 @@ namespace config {
     constexpr uint8_t STARTUP_SEQUENCE = 8;         // System startup - rainbow sweep
     constexpr uint8_t I2C_ERROR = 9;                // I2C communication error - purple blink
     constexpr uint8_t LIMIT_SWITCH_ACTIVE = 10;     // Limit switch triggered - cyan solid
+    // Homing sequence status codes (3D printer style)
+    constexpr uint8_t HOMING_FAST = 11;             // Fast approach phase - fast white pulse
+    constexpr uint8_t HOMING_RETRACT = 12;          // Retraction phase - slow white pulse
+    constexpr uint8_t HOMING_SLOW = 13;             // Slow approach phase - very slow white pulse
+    constexpr uint8_t HOMING_FINAL = 14;            // Final positioning - white breathing
   }
 
 
@@ -256,6 +267,14 @@ namespace config {
     constexpr int OUTTAKE_PWM = (constants::PWM_MAX * OUTTAKE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;              // 4095 PWM units (full power)
     constexpr int OUTTAKE_HOLD_POWER_PERCENT = 10;  // Forward holding power to prevent rolling back (0-100%)
     constexpr int OUTTAKE_REVERSE_HOLD_POWER_PERCENT = 7;  // Reverse holding power when limit switch is active (0-100%)
+
+    // -- Outtake Homing Configuration (3D Printer Style) --
+    constexpr bool ENABLE_STARTUP_HOMING = true;     // Enable automatic homing on startup
+    constexpr int HOMING_FAST_SPEED_PERCENT = 50;    // Fast approach speed for initial homing (0-100%)
+    constexpr int HOMING_SLOW_SPEED_PERCENT = 15;    // Slow precision speed for final homing (0-100%)
+    constexpr int HOMING_BUMP_DISTANCE_MS = 200;     // Time-based retraction distance (milliseconds)
+    constexpr int HOMING_TIMEOUT_MS = 10000;         // Maximum time allowed for homing sequence (10 seconds)
+    constexpr int HOMING_SAFE_POSITION_MS = 500;     // Time to move to safe position above home (milliseconds)
 
     // -- Motor Braking Configuration (Drive Motors) --
     constexpr bool ENABLE_ACTIVE_BRAKING = true;

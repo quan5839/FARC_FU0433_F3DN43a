@@ -18,7 +18,8 @@ Robot::Robot()
       driveRight(config::CHAN_DRIVE_R_FWD, config::CHAN_DRIVE_R_REV, config::tuning::INVERT_DRIVE_RIGHT, MotorType::DRIVE),
       outtakeLeft(config::CHAN_OUTTAKE_L_FWD, config::CHAN_OUTTAKE_L_REV, config::constants::MOTOR_NOT_INVERTED, MotorType::OUTTAKE),
       outtakeRight(config::CHAN_OUTTAKE_R_FWD, config::CHAN_OUTTAKE_R_REV, config::tuning::INVERT_OUTTAKE_RIGHT, MotorType::OUTTAKE),
-      selectButtonOuttakeActive(false), holdingPowerDisabled(false), reverseHoldModeActive(false), l2PressedDuringOverride(false), controlsLockedToOuttake(false) {}
+      selectButtonOuttakeActive(false), holdingPowerDisabled(false), reverseHoldModeActive(false), l2PressedDuringOverride(false), controlsLockedToOuttake(false),
+      homingComplete(false), homingStartTime(0), homingPhaseStartTime(0) {}
 
 void Robot::init() {
     // Initialize safety monitoring
@@ -40,6 +41,9 @@ void Robot::init() {
 
     // Initialize state machine
     stateMachine.init();
+
+    // Start homing sequence (3D printer style)
+    startHomingSequence();
 
     // Initialize servos (setServoAngle already constrains angles to 0-180)
     setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
@@ -132,6 +136,24 @@ void Robot::loop() {
             }
             break;
         }
+
+        // === HOMING SEQUENCE STATES (3D Printer Style) ===
+        case config::HOMING_FAST_APPROACH:
+            updateHomingFastApproach();
+            break;
+        case config::HOMING_RETRACTION:
+            updateHomingRetraction();
+            break;
+        case config::HOMING_SLOW_APPROACH:
+            updateHomingSlowApproach();
+            break;
+        case config::HOMING_FINAL_POSITION:
+            updateHomingFinalPosition();
+            break;
+        case config::HOMING_COMPLETE:
+            // Homing complete - transition to normal operation
+            setRobotState(config::MANUAL_CONTROL);
+            break;
     }
 
     // --- Update all motors ---
@@ -158,6 +180,13 @@ void Robot::processControllerInput(const ControllerState& controllerState) {
     // (This is also checked in main loop, but kept here for safety)
     if (SafetyMonitor::isControllerSafetyShutdownActive()) {
         return; // Input processing blocked - main loop handles stopping
+    }
+
+    // Block controller input during homing sequence (except emergency commands)
+    if (!isHomingComplete()) {
+        // Only allow emergency commands during homing
+        handleSpecialCommands(controllerState);
+        return;
     }
 
     handleDriveInput(controllerState);
@@ -235,6 +264,21 @@ void Robot::handleServoInput(const ControllerState& controllerState) {
 }
 
 void Robot::handleSpecialCommands(const ControllerState& controllerState) {
+
+    // Emergency abort homing sequence with START button
+    if (controllerState.start_pressed && !isHomingComplete()) {
+        DEBUG_PRINTLN("EMERGENCY: Aborting homing sequence");
+        ERROR_PRINTLN("HOMING ABORTED: Manual abort by user");
+
+        // Stop all motors immediately
+        outtakeLeft.setSpeed(0);
+        outtakeRight.setSpeed(0);
+
+        // Mark homing as complete to allow normal operation
+        homingComplete = true;
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
 
     // SELECT button: Toggle holding power and automatic outtake (when pressed alone)
     if (controllerState.select_pressed && !controllerState.start_pressed &&
@@ -977,12 +1021,34 @@ void Robot::updateLEDStrip() {
         }
         should_be_powered = true;
     }
-    // Priority 2: Controller safety shutdown
+    // Priority 2: Homing sequence in progress
+    else if (!isHomingComplete()) {
+        // Show different colors for different homing phases
+        switch (currentState) {
+            case config::HOMING_FAST_APPROACH:
+                led_status = config::led_status::HOMING_FAST;
+                break;
+            case config::HOMING_RETRACTION:
+                led_status = config::led_status::HOMING_RETRACT;
+                break;
+            case config::HOMING_SLOW_APPROACH:
+                led_status = config::led_status::HOMING_SLOW;
+                break;
+            case config::HOMING_FINAL_POSITION:
+                led_status = config::led_status::HOMING_FINAL;
+                break;
+            default:
+                led_status = config::led_status::HOMING_FAST;
+                break;
+        }
+        should_be_powered = true;
+    }
+    // Priority 3: Controller safety shutdown
     else if (SafetyMonitor::isControllerSafetyShutdownActive()) {
         led_status = config::led_status::CONTROLLER_SAFETY;
         should_be_powered = true;
     }
-    // Priority 3: Controller connection status
+    // Priority 4: Controller connection status
     else if (!isConnected()) {
         led_status = config::led_status::CONTROLLER_DISCONNECTED;
         should_be_powered = true;
@@ -1133,3 +1199,157 @@ void Robot::testLEDStripHardware() {
     DEBUG_PRINTLN("LED strip hardware test complete");
 }
 
+// === HOMING SEQUENCE IMPLEMENTATION (3D Printer Style) ===
+
+void Robot::startHomingSequence() {
+    if (!config::tuning::ENABLE_STARTUP_HOMING) {
+        homingComplete = true;
+        return;
+    }
+
+    DEBUG_PRINTLN("=== STARTING OUTTAKE HOMING SEQUENCE ===");
+    DEBUG_PRINTLN("Phase 1: Fast approach to limit switch");
+
+    homingComplete = false;
+    homingStartTime = millis();
+    homingPhaseStartTime = millis();
+    setRobotState(config::HOMING_FAST_APPROACH);
+}
+
+void Robot::updateHomingFastApproach() {
+    // Phase 1: Fast approach to limit switch (like 3D printer fast homing)
+    const unsigned long elapsed = millis() - homingStartTime;
+
+    // Safety timeout check
+    if (elapsed > config::tuning::HOMING_TIMEOUT_MS) {
+        ERROR_PRINTLN("HOMING FAILED: Timeout during fast approach");
+        homingComplete = true;  // Mark as complete to prevent blocking
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
+
+    // Check if limit switch is triggered
+    if (readLimitSwitch()) {
+        DEBUG_PRINTLN("Phase 1 complete: Limit switch triggered");
+        DEBUG_PRINTLN("Phase 2: Retracting for precision approach");
+
+        // Stop motors immediately
+        outtakeLeft.setSpeed(0);
+        outtakeRight.setSpeed(0);
+
+        // Move to retraction phase
+        homingPhaseStartTime = millis();
+        setRobotState(config::HOMING_RETRACTION);
+        return;
+    }
+
+    // Continue fast approach downward
+    int fastSpeed = -PWMUtils::percentageToPWM(config::tuning::HOMING_FAST_SPEED_PERCENT);
+    outtakeLeft.setSpeed(fastSpeed);
+    outtakeRight.setSpeed(fastSpeed);
+}
+
+void Robot::updateHomingRetraction() {
+    // Phase 2: Retract to clear limit switch (like 3D printer bump distance)
+    const unsigned long phaseElapsed = millis() - homingPhaseStartTime;
+    const unsigned long totalElapsed = millis() - homingStartTime;
+
+    // Safety timeout check
+    if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
+        ERROR_PRINTLN("HOMING FAILED: Timeout during retraction");
+        homingComplete = true;
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
+
+    // Check if retraction time is complete
+    if (phaseElapsed >= config::tuning::HOMING_BUMP_DISTANCE_MS) {
+        DEBUG_PRINTLN("Phase 2 complete: Retraction finished");
+        DEBUG_PRINTLN("Phase 3: Slow precision approach");
+
+        // Stop motors
+        outtakeLeft.setSpeed(0);
+        outtakeRight.setSpeed(0);
+
+        // Move to slow approach phase
+        homingPhaseStartTime = millis();
+        setRobotState(config::HOMING_SLOW_APPROACH);
+        return;
+    }
+
+    // Continue retraction upward
+    int retractionSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
+    outtakeLeft.setSpeed(retractionSpeed);
+    outtakeRight.setSpeed(retractionSpeed);
+}
+
+void Robot::updateHomingSlowApproach() {
+    // Phase 3: Slow precision approach (like 3D printer precision homing)
+    const unsigned long totalElapsed = millis() - homingStartTime;
+
+    // Safety timeout check
+    if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
+        ERROR_PRINTLN("HOMING FAILED: Timeout during slow approach");
+        homingComplete = true;
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
+
+    // Check if limit switch is triggered (precision home position)
+    if (readLimitSwitch()) {
+        DEBUG_PRINTLN("Phase 3 complete: Precision home position found");
+        DEBUG_PRINTLN("Phase 4: Moving to safe operating position");
+
+        // Stop motors immediately
+        outtakeLeft.setSpeed(0);
+        outtakeRight.setSpeed(0);
+
+        // Move to final positioning phase
+        homingPhaseStartTime = millis();
+        setRobotState(config::HOMING_FINAL_POSITION);
+        return;
+    }
+
+    // Continue slow approach downward
+    int slowSpeed = -PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
+    outtakeLeft.setSpeed(slowSpeed);
+    outtakeRight.setSpeed(slowSpeed);
+}
+
+void Robot::updateHomingFinalPosition() {
+    // Phase 4: Move to safe operating position above home
+    const unsigned long phaseElapsed = millis() - homingPhaseStartTime;
+    const unsigned long totalElapsed = millis() - homingStartTime;
+
+    // Safety timeout check
+    if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
+        ERROR_PRINTLN("HOMING FAILED: Timeout during final positioning");
+        homingComplete = true;
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
+
+    // Check if final positioning time is complete
+    if (phaseElapsed >= config::tuning::HOMING_SAFE_POSITION_MS) {
+        DEBUG_PRINTLN("Phase 4 complete: Safe operating position reached");
+        DEBUG_PRINTLN("=== HOMING SEQUENCE COMPLETE ===");
+
+        // Stop motors
+        outtakeLeft.setSpeed(0);
+        outtakeRight.setSpeed(0);
+
+        // Mark homing as complete
+        homingComplete = true;
+        setRobotState(config::HOMING_COMPLETE);
+        return;
+    }
+
+    // Continue moving to safe position upward
+    int safePositionSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
+    outtakeLeft.setSpeed(safePositionSpeed);
+    outtakeRight.setSpeed(safePositionSpeed);
+}
+
+bool Robot::isHomingComplete() const {
+    return homingComplete;
+}
