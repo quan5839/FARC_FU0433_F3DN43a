@@ -1,6 +1,5 @@
-# 🤖 FARC Robot Codebase - Team FU433 F3DN43a
+# FARC Robot Codebase - Team F3DN43a
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Arduino](https://img.shields.io/badge/Arduino-ESP32-blue.svg)](https://www.arduino.cc/)
 [![Competition](https://img.shields.io/badge/Competition-FARC%202025-red.svg)](https://www.facebook.com/FPTUAiroboticschallenge/)
 
@@ -10,55 +9,55 @@
 
 ## English
 
-### 🏆 Project Overview
+### Project Overview
 
 Open-source robotics codebase for **FPTU AI & Robotics Challenge (FARC) 2025** competition. This repository contains a professional-grade robot control system featuring advanced motor control, 3D printer-style homing sequences, and comprehensive safety systems.
 
 **Team Information:**
-- **Team ID:** FU433 F3DN43a
+- **Team ID:** FU433
+- **Team Name:** F3DN43a
 - **Competition:** FPTU AI & Robotics Challenge 2025
-- **University:** FPT University
-- **License:** MIT License
+- **School:** FPT High School Da Nang
 
-### ✨ Unique Features
+### Unique Features
 
-#### 🎯 3D Printer-Style Homing Sequence
+#### 3D Printer-Style Homing Sequence
 - **4-phase precision homing** (Fast Approach → Retraction → Slow Approach → Final Position)
 - **Marlin firmware inspired** implementation with bump distance and precision positioning
 - **Safety timeouts** and emergency abort functionality
 - **Visual feedback** through LED status indicators
 
-#### ⚡ Advanced Motor Control System
+#### Advanced Motor Control System
 - **Electromagnetic braking** with mixed-decay control (fast/slow decay phases)
 - **Infinite brake time** support for outtake mechanism
 - **Speed ramping** and acceleration control
 - **Direction change protection** with automatic braking
 
-#### 🎮 PS2 Controller Integration
+#### PS2 Controller Integration
 - **Comprehensive safety monitoring** with automatic shutdown
 - **Input validation** and debouncing
 - **Emergency override** capabilities
 - **Real-time connection status** tracking
 
-#### 🏗️ Modular Architecture
+#### Modular Architecture
 - **State machine design** for reliable operation
 - **Centralized configuration** system (config.h)
 - **Hardware abstraction layer** (HAL) for easy porting
 - **Comprehensive error handling** and recovery
 
-#### 💡 LED Status Feedback System
+#### LED Status Feedback System
 - **Real-time visual feedback** for all robot states
 - **Priority-based status** indication
 - **Homing progress** visualization
 - **Error and warning** notifications
 
-#### 🔧 VIA "Banh Mi" v2023 Board Support
+#### VIA "Banh Mi" v2023 Board Support
 - **Native ESP32-WROOM-32E** support
 - **PCA9685 PWM driver** integration
 - **Optimized pin configuration** for competition robotics
 - **Hardware-specific optimizations**
 
-### 🔧 Hardware Requirements
+### Hardware Requirements
 
 #### Core Components
 - **Microcontroller:** ESP32-WROOM-32E (VIA "banh mi" v2023 board)
@@ -91,7 +90,7 @@ ESP32 GPIO Pins:
     └── GPIO 25: WS2812B data
 ```
 
-### 📚 Software Dependencies
+### Software Dependencies
 
 #### Required Libraries
 ```cpp
@@ -107,7 +106,7 @@ ESP32 GPIO Pins:
 - **ESP32 Arduino Core** 2.0.0+
 - **Board Selection:** "ESP32 Dev Module"
 
-### 🚀 Quick Start Guide
+### Quick Start Guide
 
 #### 1. Hardware Setup
 1. Connect ESP32 to PCA9685 via I2C (GPIO 21/22)
@@ -149,7 +148,7 @@ constexpr int HOMING_FAST_SPEED_PERCENT = 50;
 constexpr bool LIMIT_SWITCH_DISABLED = false;
 ```
 
-### 🎮 Controller Mapping
+### Controller Mapping
 
 #### Drive Controls
 - **Left Joystick:** Tank drive (left motor)
@@ -170,7 +169,7 @@ constexpr bool LIMIT_SWITCH_DISABLED = false;
 - **Right D-pad:** Toggle limit switch override
 - **SELECT + START:** System diagnostics
 
-### 🏠 Homing Sequence Operation
+### Homing Sequence Operation
 
 The robot automatically performs a 3D printer-style homing sequence on startup:
 
@@ -192,7 +191,7 @@ The robot automatically performs a 3D printer-style homing sequence on startup:
 
 **Emergency Abort:** Press START button during homing to abort sequence.
 
-### 🛡️ Safety Features
+### Safety Features
 
 #### Automatic Safety Systems
 - **Controller timeout** monitoring (1 second)
@@ -205,7 +204,7 @@ The robot automatically performs a 3D printer-style homing sequence on startup:
 - **Emergency abort** (START button)
 - **Control lock mode** (SELECT button)
 
-### 🏁 Competition vs Development Mode
+### Competition vs Development Mode
 
 Toggle between modes in `robot/src/config.h`:
 ```cpp
@@ -224,7 +223,7 @@ constexpr bool COMPETITION_MODE = true;  // Disable debug output for performance
 - ✅ Performance monitoring
 - ✅ Safety warnings
 
-### 📁 Code Structure
+### Code Structure
 
 ```
 robot/
@@ -249,7 +248,7 @@ robot/
     └── Sensor documentation
 ```
 
-### 🔧 Adding New Features
+### Adding New Features
 
 #### 1. Adding a New Sensor
 ```cpp
@@ -286,7 +285,7 @@ if (controllerState.triangle_pressed) {
 }
 ```
 
-### 🐛 Troubleshooting
+### Troubleshooting
 
 #### Common Issues
 
@@ -325,7 +324,7 @@ constexpr bool COMPETITION_MODE = false;  // Enable debug output
 constexpr bool ENABLE_DEBUG_OUTPUT = true;
 ```
 
-### 📋 Component Documentation
+### Component Documentation
 
 The `Component Document/` folder contains comprehensive documentation for all supported hardware:
 
