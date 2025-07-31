@@ -14,10 +14,11 @@
 // --- Robot class implementation ---
 
 Robot::Robot()
-    : driveLeft(config::CHAN_DRIVE_L_FWD, config::CHAN_DRIVE_L_REV, config::tuning::INVERT_DRIVE_LEFT),
-      driveRight(config::CHAN_DRIVE_R_FWD, config::CHAN_DRIVE_R_REV, config::tuning::INVERT_DRIVE_RIGHT),
-      outtakeLeft(config::CHAN_OUTTAKE_L_FWD, config::CHAN_OUTTAKE_L_REV, config::constants::MOTOR_NOT_INVERTED),
-      outtakeRight(config::CHAN_OUTTAKE_R_FWD, config::CHAN_OUTTAKE_R_REV, config::tuning::INVERT_OUTTAKE_RIGHT) {}
+    : driveLeft(config::CHAN_DRIVE_L_FWD, config::CHAN_DRIVE_L_REV, config::tuning::INVERT_DRIVE_LEFT, MotorType::DRIVE),
+      driveRight(config::CHAN_DRIVE_R_FWD, config::CHAN_DRIVE_R_REV, config::tuning::INVERT_DRIVE_RIGHT, MotorType::DRIVE),
+      outtakeLeft(config::CHAN_OUTTAKE_L_FWD, config::CHAN_OUTTAKE_L_REV, config::constants::MOTOR_NOT_INVERTED, MotorType::OUTTAKE),
+      outtakeRight(config::CHAN_OUTTAKE_R_FWD, config::CHAN_OUTTAKE_R_REV, config::tuning::INVERT_OUTTAKE_RIGHT, MotorType::OUTTAKE),
+      selectButtonOuttakeActive(false), holdingPowerDisabled(false), reverseHoldModeActive(false), l2PressedDuringOverride(false), controlsLockedToOuttake(false) {}
 
 void Robot::init() {
     // Initialize safety monitoring
@@ -41,7 +42,7 @@ void Robot::init() {
     stateMachine.init();
 
     // Initialize servos (setServoAngle already constrains angles to 0-180)
-    setServoAngle(config::INTAKE_SERVO_CHANNEL, config::tuning::INTAKE_ARM_CLOSE_ANGLE);
+    setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
 
     // Initialize WS2812B LED strip
     initLEDStrip();
@@ -60,7 +61,12 @@ void Robot::loop() {
         }
     }
 
-
+    // Periodic I2C health monitoring
+    static unsigned long last_i2c_check = 0;
+    if (millis() - last_i2c_check >= config::performance::I2C_HEALTH_CHECK_INTERVAL_MS) {
+        performI2CHealthCheck();
+        last_i2c_check = millis();
+    }
 
     // Check for controller safety shutdown (separate from system errors)
     if (UNLIKELY(SafetyMonitor::isControllerSafetyShutdownActive())) {
@@ -100,13 +106,19 @@ void Robot::loop() {
         case config::AUTOMATIC_OUTTAKE_REVERSE: {
             const bool limitSwitchTriggered = readLimitSwitch();
             if (limitSwitchTriggered) {
+                // When limit switch is triggered, activate reverse hold mode
+                DEBUG_PRINTLN("Limit switch triggered - activating reverse hold mode");
+                reverseHoldModeActive = true;
+                selectButtonOuttakeActive = false;  // Stop automatic outtake
                 setRobotState(config::MANUAL_CONTROL);
                 break;
             }
             const int outtakePWM = PWMUtils::getOuttakePWM();
             outtakeLeft.setSpeed(-outtakePWM);
             outtakeRight.setSpeed(-outtakePWM);
-            if (stateMachine.getStateElapsedTime() > config::tuning::OUTTAKE_TIMEOUT_MS || limitSwitchTriggered) {
+            if (stateMachine.getStateElapsedTime() > config::tuning::OUTTAKE_TIMEOUT_MS) {
+                // Timeout reached - stop automatic outtake but keep holding power disabled
+                selectButtonOuttakeActive = false;
                 setRobotState(config::MANUAL_CONTROL);
             }
             break;
@@ -123,6 +135,12 @@ void Robot::loop() {
     }
 
     // --- Update all motors ---
+    // Force drive motors to stop if controls are locked
+    if (controlsLockedToOuttake) {
+        driveLeft.setSpeed(0);
+        driveRight.setSpeed(0);
+    }
+
     driveLeft.update();
     driveRight.update();
     outtakeLeft.update();
@@ -149,6 +167,14 @@ void Robot::processControllerInput(const ControllerState& controllerState) {
 }
 
 void Robot::handleDriveInput(const ControllerState& controllerState) {
+    // Skip drive control if controls are locked to outtake only
+    if (controlsLockedToOuttake) {
+        // Stop drive motors when controls are locked
+        DEBUG_PRINTLN("Drive control locked - stopping motors");
+        setDriveMotorSpeeds(0, 0);
+        return;
+    }
+
     int leftPWM, rightPWM;
     calculateDriveMotorSpeeds(controllerState, leftPWM, rightPWM);
     setDriveMotorSpeeds(leftPWM, rightPWM);
@@ -159,8 +185,25 @@ void Robot::handleOuttakeInput(const ControllerState& controllerState) {
 
     if (controllerState.l1_pressed) {
         outtakeMotorCommand = PWMUtils::getOuttakePWM();
+        // Clear any reverse hold modes when actively controlling
+        reverseHoldModeActive = false;
+        l2PressedDuringOverride = false;
     } else if (controllerState.l2_pressed) {
         outtakeMotorCommand = -PWMUtils::getOuttakePWM();
+        // Track L2 press during limit switch override
+        if (config::tuning::LIMIT_SWITCH_DISABLED) {
+            l2PressedDuringOverride = true;
+        }
+        // Clear reverse hold mode when actively controlling
+        reverseHoldModeActive = false;
+    } else {
+        // No buttons pressed - check if we should activate reverse hold
+        if (l2PressedDuringOverride && config::tuning::LIMIT_SWITCH_DISABLED) {
+            // L2 was released after being pressed during override - activate reverse hold
+            DEBUG_PRINTLN("L2 released during override - activating reverse hold mode");
+            reverseHoldModeActive = true;
+            l2PressedDuringOverride = false;
+        }
     }
 
     // Safety check: prevent reverse motion if limit switch is triggered (unless overridden)
@@ -173,23 +216,70 @@ void Robot::handleOuttakeInput(const ControllerState& controllerState) {
 }
 
 void Robot::handleServoInput(const ControllerState& controllerState) {
+    // Skip servo control if controls are locked to outtake only
+    if (controlsLockedToOuttake) {
+        return;
+    }
+
     if (controllerState.r2_pressed) {
-        handleServoToggle(config::OUTTAKE_SERVO_CHANNEL, outtakeArmToggled,
-                         config::tuning::OUTTAKE_ARM_OPEN_ANGLE, config::tuning::OUTTAKE_ARM_CLOSE_ANGLE);
+        handleServoToggle(config::BALL_SERVO_CHANNEL, ballServoToggled,
+                         config::tuning::BALL_SERVO_OPEN_ANGLE, config::tuning::BALL_SERVO_CLOSE_ANGLE);
     }
     if (controllerState.circle_pressed) {
-        handleServoToggle(config::INTAKE_SERVO_CHANNEL, intakeArmToggled,
-                         config::tuning::INTAKE_ARM_OPEN_ANGLE, config::tuning::INTAKE_ARM_CLOSE_ANGLE);
+        handleServoToggle(config::FRUIT_SERVO_CHANNEL, fruitServoToggled,
+                         config::tuning::FRUIT_SERVO_OPEN_ANGLE, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
     }
+
+    // Continuous servo control for fruit intake
+    handleFruitIntakeServos(controllerState);
 }
 
 void Robot::handleSpecialCommands(const ControllerState& controllerState) {
 
+    // SELECT button: Toggle holding power and automatic outtake (when pressed alone)
+    if (controllerState.select_pressed && !controllerState.start_pressed &&
+        !controllerState.l1_pressed && !controllerState.l2_pressed &&
+        !controllerState.r1_pressed && !controllerState.r2_pressed) {
 
+        if (selectButtonOuttakeActive || holdingPowerDisabled || reverseHoldModeActive || controlsLockedToOuttake) {
+            // Stop automatic outtake reverse and/or restore normal holding power and unlock controls
+            DEBUG_PRINTLN("SELECT: Stopping automatic outtake - restoring normal holding power and unlocking controls");
+            selectButtonOuttakeActive = false;
+            holdingPowerDisabled = false;  // Re-enable normal holding power
+            reverseHoldModeActive = false;  // Disable reverse hold mode
+            l2PressedDuringOverride = false;  // Reset override tracking
+            controlsLockedToOuttake = false;  // Unlock all controls
+            setRobotState(config::MANUAL_CONTROL);
+        } else if (!selectButtonOuttakeActive && stateMachine.getCurrentState() == config::MANUAL_CONTROL) {
+            // Lock controls to outtake only and disable holding power when SELECT is pressed
+            controlsLockedToOuttake = true;
+            holdingPowerDisabled = true;
+            DEBUG_PRINTLN("SELECT: Locking controls to outtake only and disabling holding power");
+
+            // Start automatic outtake reverse only if limit switch safety allows
+            if (!config::tuning::LIMIT_SWITCH_DISABLED) {
+                DEBUG_PRINTLN("SELECT: Starting automatic outtake reverse");
+                selectButtonOuttakeActive = true;
+                automaticOuttakeReverse();
+            } else {
+                DEBUG_PRINTLN("SELECT: Limit switch disabled - holding power off but no automatic outtake");
+            }
+        }
+    }
+
+    // I2C health check (START only, no other buttons)
+    if (controllerState.start_pressed && !controllerState.l1_pressed && !controllerState.select_pressed) {
+        performI2CHealthCheck();
+    }
     if (controllerState.pad_right_pressed) {
         config::tuning::LIMIT_SWITCH_DISABLED = !config::tuning::LIMIT_SWITCH_DISABLED;
         DEBUG_PRINT("Limit switch override: ");
         DEBUG_PRINTLN(config::tuning::LIMIT_SWITCH_DISABLED ? "DISABLED (override active)" : "ENABLED (safety active)");
+
+        // Reset override tracking when limit switch override is disabled
+        if (!config::tuning::LIMIT_SWITCH_DISABLED) {
+            l2PressedDuringOverride = false;
+        }
     }
     if (controllerState.pad_down_pressed) {
         if (!config::tuning::LIMIT_SWITCH_DISABLED) {
@@ -200,7 +290,15 @@ void Robot::handleSpecialCommands(const ControllerState& controllerState) {
         timedOuttakeForward();
     }
 
+    // Performance test (START + SELECT)
+    if (controllerState.start_pressed && controllerState.select_pressed) {
+        testI2CPerformance();
+    }
 
+    // I2C bus scan (L1 + SELECT)
+    if (controllerState.l1_pressed && controllerState.select_pressed) {
+        scanI2CBus();
+    }
 
     // IMU test (L2 + SELECT)
     if (controllerState.l2_pressed && controllerState.select_pressed) {
@@ -224,8 +322,8 @@ void Robot::handleSpecialCommands(const ControllerState& controllerState) {
 
 void Robot::automaticOuttakeReverse() {
     setRobotState(config::AUTOMATIC_OUTTAKE_REVERSE);
-    setServoAngle(config::OUTTAKE_SERVO_CHANNEL, config::tuning::OUTTAKE_ARM_CLOSE_ANGLE);
-    setServoAngle(config::INTAKE_SERVO_CHANNEL, config::tuning::INTAKE_ARM_CLOSE_ANGLE);
+    setServoAngle(config::BALL_SERVO_CHANNEL, config::tuning::BALL_SERVO_CLOSE_ANGLE);
+    setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
 }
 
 void Robot::timedOuttakeForward() {
@@ -266,91 +364,254 @@ bool Robot::readLimitSwitch() {
     return limitSwitchState.lastState == config::constants::LIMIT_SWITCH_TRIGGERED;
 }
 
+void Robot::performI2CHealthCheck() {
+    const unsigned long start_time = micros();
+    i2cHealthState.total_transactions++;
 
+    #if !COMPETITION_MODE
+    Serial.println("=== I2C Health Check ===");
+    #endif
 
+    // Test PCA9685 connection and response time
+    const unsigned long pca_start = micros();
+    Wire.beginTransmission(config::pca9685::I2C_ADDRESS);
+    uint8_t pca_error = Wire.endTransmission();
+    const unsigned long pca_time = micros() - pca_start;
 
-
-// I2C monitoring functions removed
-
-// Helper function implementations
-void Robot::calculateDriveMotorSpeeds(const ControllerState& controllerState, int& leftPWM, int& rightPWM) {
-    // Determine speed mode (precision vs normal)
-    int topDuty = controllerState.r1_pressed ? PWMUtils::getPrecisionPWM() : PWMUtils::getMaxPWM();
-
-    // Process joystick inputs
-    int processedY, processedX;
-    processJoystickInputs(controllerState, processedY, processedX);
-
-    // Calculate motor speeds using selected drive style
-    PWMUtils::calculateCheesyDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
-}
-
-void Robot::processJoystickInputs(const ControllerState& controllerState, int& processedY, int& processedX) {
-    // Apply deadzone to joystick inputs for better control
-    processedY = PWMUtils::applyDeadzone(controllerState.left_joystick_y, config::ps2::JOYSTICK_DEADZONE);
-    processedX = PWMUtils::applyDeadzone(controllerState.right_joystick_x, config::ps2::JOYSTICK_DEADZONE);
-}
-
-void Robot::setDriveMotorSpeeds(int leftPWM, int rightPWM) {
-    // Apply PWM clamping for safety
-    int safeLeftPWM = PWMUtils::clampPWM(leftPWM);
-    int safeRightPWM = PWMUtils::clampPWM(rightPWM);
-
-    // Detect if this is a turning movement
-    bool is_turning = detectTurningMovement(safeLeftPWM, safeRightPWM);
-
-    // Set motor speeds with turn context (electromagnetic braking always enabled)
-    driveLeft.setSpeed(safeLeftPWM, is_turning);
-    driveRight.setSpeed(safeRightPWM, is_turning);
-}
-
-void Robot::setOuttakeMotorSpeeds(int speed) {
-    // Apply PWM clamping for safety
-    int safeSpeed = PWMUtils::clampPWM(speed);
-
-    // Apply holding power when no outtake buttons are pressed
-    if (safeSpeed == 0) {
-        // Use small forward power to hold position and prevent rolling back
-        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
-        outtakeLeft.setSpeed(holdPower, false);
-        outtakeRight.setSpeed(holdPower, false);
+    if (pca_error == 0) {
+        i2cHealthState.pca9685_connected = true;
+        i2cHealthState.pca9685_last_success = millis();
+        i2cHealthState.pca9685_response_time_us = pca_time;
+        #if !COMPETITION_MODE
+        Serial.print("PCA9685: CONNECTED (");
+        Serial.print(pca_time);
+        Serial.println("μs response)");
+        #endif
     } else {
-        // Normal speed control when moving
-        outtakeLeft.setSpeed(safeSpeed, false);
-        outtakeRight.setSpeed(safeSpeed, false);
+        i2cHealthState.pca9685_connected = false;
+        i2cHealthState.pca9685_error_count++;
+        i2cHealthState.failed_transactions++;
+        #if !COMPETITION_MODE
+        Serial.print("PCA9685: DISCONNECTED (error ");
+        Serial.print(pca_error);
+        Serial.println(")");
+        #endif
     }
+
+    // // Test MPU6050 connection and response time (if enabled)
+    // if (config::imu::ENABLE_IMU) {
+    //     // Switch to MPU6050 I2C speed for testing
+    //     Wire.setClock(config::imu::I2C_CLOCK_SPEED);
+
+    //     const unsigned long mpu_start = micros();
+    //     Wire.beginTransmission(config::imu::I2C_ADDRESS);
+    //     uint8_t mpu_error = Wire.endTransmission();
+    //     const unsigned long mpu_time = micros() - mpu_start;
+
+    //     // Restore PCA9685 I2C speed
+    //     Wire.setClock(config::pca9685::I2C_CLOCK_SPEED);
+
+    //     if (mpu_error == 0) {
+    //         i2cHealthState.mpu6050_connected = true;
+    //         i2cHealthState.mpu6050_last_success = millis();
+    //         i2cHealthState.mpu6050_response_time_us = mpu_time;
+    //         #if !COMPETITION_MODE
+    //         Serial.print("MPU6050: CONNECTED (");
+    //         Serial.print(mpu_time);
+    //         Serial.println("μs response)");
+    //         #endif
+    //     } else {
+    //         i2cHealthState.mpu6050_connected = false;
+    //         i2cHealthState.mpu6050_error_count++;
+    //         i2cHealthState.failed_transactions++;
+    //         #if !COMPETITION_MODE
+    //         Serial.print("MPU6050: DISCONNECTED (error ");
+    //         Serial.print(mpu_error);
+    //         Serial.println(")");
+    //         #endif
+    //     }
+    // } else {
+    //     #if !COMPETITION_MODE
+    //     Serial.println("MPU6050: DISABLED");
+    //     #endif
+    // }
+
+    // Update bus health status
+    const float error_rate = (float)i2cHealthState.failed_transactions / i2cHealthState.total_transactions;
+    i2cHealthState.bus_healthy = (error_rate < config::performance::I2C_MAX_ERROR_RATE);
+    i2cHealthState.i2c_speed_hz = config::pca9685::I2C_CLOCK_SPEED;
+    i2cHealthState.last_health_check = millis();
+
+    // Check for slow response times
+    if (i2cHealthState.pca9685_connected &&
+        i2cHealthState.pca9685_response_time_us > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+        #if !COMPETITION_MODE
+        Serial.print("WARNING: PCA9685 slow response (");
+        Serial.print(i2cHealthState.pca9685_response_time_us);
+        Serial.println("μs > 1000μs threshold)");
+        #endif
+    }
+
+    if (config::imu::ENABLE_IMU && i2cHealthState.mpu6050_connected &&
+        i2cHealthState.mpu6050_response_time_us > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+        #if !COMPETITION_MODE
+        Serial.print("WARNING: MPU6050 slow response (");
+        Serial.print(i2cHealthState.mpu6050_response_time_us);
+        Serial.println("μs > 1000μs threshold)");
+        #endif
+    }
+
+    const unsigned long total_time = micros() - start_time;
+    #if !COMPETITION_MODE
+    Serial.print("I2C Health Check completed in ");
+    Serial.print(total_time);
+    Serial.println("μs");
+    Serial.println("========================");
+    #endif
 }
 
-void Robot::stopAllMotors() {
-    // Use literal 0 for better performance than constant lookup
-    // Enable braking for better stopping control on all motors
-    driveLeft.setSpeed(0, false);
-    driveRight.setSpeed(0, false);
-    outtakeLeft.setSpeed(0, false);
-    outtakeRight.setSpeed(0, false);
+void Robot::printI2CDiagnostics() const {
+    #if !COMPETITION_MODE
+    Serial.println("=== I2C Diagnostics ===");
+
+    // I2C Bus Configuration
+    Serial.print("PCA9685 I2C Speed: ");
+    Serial.print(config::pca9685::I2C_CLOCK_SPEED / 1000);
+    Serial.println(" kHz");
+    if (config::imu::ENABLE_IMU) {
+        Serial.print("MPU6050 I2C Speed: ");
+        Serial.print(config::imu::I2C_CLOCK_SPEED / 1000);
+        Serial.println(" kHz");
+    }
+    Serial.println("SDA Pin: GPIO 21, SCL Pin: GPIO 22 (VIA v2023 defaults)");
+
+    // Bus Health
+    Serial.print("Bus Health: ");
+    Serial.println(i2cHealthState.bus_healthy ? "HEALTHY" : "UNHEALTHY");
+    Serial.print("Total Transactions: ");
+    Serial.println(i2cHealthState.total_transactions);
+    Serial.print("Failed Transactions: ");
+    Serial.println(i2cHealthState.failed_transactions);
+
+    if (i2cHealthState.total_transactions > 0) {
+        float error_rate = (float)i2cHealthState.failed_transactions / i2cHealthState.total_transactions * 100;
+        Serial.print("Error Rate: ");
+        Serial.print(error_rate, 1); // One decimal place
+        Serial.println("%");
+    }
+
+    // PCA9685 Status
+    Serial.println("--- PCA9685 Motor Controller ---");
+    Serial.print("Address: 0x");
+    Serial.println(config::pca9685::I2C_ADDRESS, HEX);
+    Serial.print("Status: ");
+    Serial.println(i2cHealthState.pca9685_connected ? "CONNECTED" : "DISCONNECTED");
+
+    if (i2cHealthState.pca9685_connected) {
+        Serial.print("Response Time: ");
+        Serial.print(i2cHealthState.pca9685_response_time_us);
+        Serial.println("μs");
+        Serial.print("Last Success: ");
+        Serial.print(millis() - i2cHealthState.pca9685_last_success);
+        Serial.println("ms ago");
+    }
+
+    Serial.print("Error Count: ");
+    Serial.println(i2cHealthState.pca9685_error_count);
+
+    // MPU6050 Status
+    Serial.println("--- MPU6050 IMU Sensor ---");
+    Serial.print("Address: 0x");
+    Serial.println(config::imu::I2C_ADDRESS, HEX);
+    Serial.print("Enabled: ");
+    Serial.println(config::imu::ENABLE_IMU ? "YES" : "NO");
+
+    if (config::imu::ENABLE_IMU) {
+        Serial.print("Status: ");
+        Serial.println(i2cHealthState.mpu6050_connected ? "CONNECTED" : "DISCONNECTED");
+
+        if (i2cHealthState.mpu6050_connected) {
+            Serial.print("Response Time: ");
+            Serial.print(i2cHealthState.mpu6050_response_time_us);
+            Serial.println("μs");
+            Serial.print("Last Success: ");
+            Serial.print(millis() - i2cHealthState.mpu6050_last_success);
+            Serial.println("ms ago");
+        }
+
+        Serial.print("Error Count: ");
+        Serial.println(i2cHealthState.mpu6050_error_count);
+    }
+
+    Serial.println("=======================");
+    #endif
 }
 
-void Robot::brakeAllMotors() {
-    // Apply FTC-style active braking to all motors
-    driveLeft.brake();
-    driveRight.brake();
-    outtakeLeft.brake();
-    outtakeRight.brake();
-}
+void Robot::testI2CPerformance() {
+    #if !COMPETITION_MODE
+    Serial.println("=== I2C Performance Test ===");
+    Serial.println("Testing I2C speed and stability...");
 
-void Robot::coastAllMotors() {
-    // Coast all motors to stop (no active braking)
-    driveLeft.coast();
-    driveRight.coast();
-    outtakeLeft.coast();
-    outtakeRight.coast();
-}
+    const int TEST_ITERATIONS = 100;
+    unsigned long total_time = 0;
+    unsigned long min_time = ULONG_MAX;
+    unsigned long max_time = 0;
+    int successful_transactions = 0;
 
-bool Robot::detectTurningMovement(int leftPWM, int rightPWM) {
-    // Detect if the robot is turning based on differential motor speeds
-    int pwmDifference = abs(leftPWM - rightPWM);
-    return pwmDifference > config::tuning::TURN_DETECTION_THRESHOLD;
-}
+    // Test PCA9685 performance
+    Serial.print("Testing PCA9685 (");
+    Serial.print(TEST_ITERATIONS);
+    Serial.println(" transactions)...");
+
+    for (int i = 0; i < TEST_ITERATIONS; i++) {
+        const unsigned long start = micros();
+        Wire.beginTransmission(config::pca9685::I2C_ADDRESS);
+        uint8_t error = Wire.endTransmission();
+        const unsigned long duration = micros() - start;
+
+        if (error == 0) {
+            successful_transactions++;
+            total_time += duration;
+            if (duration < min_time) min_time = duration;
+            if (duration > max_time) max_time = duration;
+        }
+
+        // Small delay between transactions
+        delayMicroseconds(100);
+    }
+
+    // Calculate statistics
+    if (successful_transactions > 0) {
+        const float avg_time = (float)total_time / successful_transactions;
+        const float success_rate = (float)successful_transactions / TEST_ITERATIONS * 100;
+
+        Serial.print("PCA9685 Results:");
+        Serial.print(" Success Rate: ");
+        Serial.print(success_rate, 1);
+        Serial.println("%");
+        Serial.print("  Average Time: ");
+        Serial.print(avg_time, 1);
+        Serial.println("μs");
+        Serial.print("  Min Time: ");
+        Serial.print(min_time);
+        Serial.println("μs");
+        Serial.print("  Max Time: ");
+        Serial.print(max_time);
+        Serial.println("μs");
+
+        // Performance analysis
+        if (avg_time > config::performance::I2C_RESPONSE_TIMEOUT_US) {
+            Serial.println("WARNING: Average response time exceeds threshold!");
+        }
+        if (success_rate < 95.0) {
+            Serial.println("WARNING: Low success rate indicates I2C issues!");
+        }
+        if (max_time > avg_time * 3) {
+            Serial.println("WARNING: High response time variance detected!");
+        }
+    } else {
+        Serial.println("PCA9685: NO SUCCESSFUL TRANSACTIONS!");
+    }
     #endif
 
     #if !COMPETITION_MODE
@@ -508,7 +769,7 @@ void Robot::calculateDriveMotorSpeeds(const ControllerState& controllerState, in
     processJoystickInputs(controllerState, processedY, processedX);
 
     // Calculate motor speeds using selected drive style
-    PWMUtils::calculateCheesyDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
+    PWMUtils::calculateDifferentialDrive(processedY, processedX, leftPWM, rightPWM, topDuty);
 }
 
 void Robot::processJoystickInputs(const ControllerState& controllerState, int& processedY, int& processedX) {
@@ -518,42 +779,60 @@ void Robot::processJoystickInputs(const ControllerState& controllerState, int& p
 }
 
 void Robot::setDriveMotorSpeeds(int leftPWM, int rightPWM) {
-    // Apply PWM clamping for safety
+    // Apply PWM clamping for safety and set motor speeds
     int safeLeftPWM = PWMUtils::clampPWM(leftPWM);
     int safeRightPWM = PWMUtils::clampPWM(rightPWM);
 
-    // Detect if this is a turning movement
-    bool is_turning = detectTurningMovement(safeLeftPWM, safeRightPWM);
-
-    // Set motor speeds with turn context (electromagnetic braking always enabled)
-    driveLeft.setSpeed(safeLeftPWM, is_turning);
-    driveRight.setSpeed(safeRightPWM, is_turning);
+    // Simple VEX/FTC-style motor control
+    driveLeft.setSpeed(safeLeftPWM);
+    driveRight.setSpeed(safeRightPWM);
 }
+
 
 void Robot::setOuttakeMotorSpeeds(int speed) {
     // Apply PWM clamping for safety
     int safeSpeed = PWMUtils::clampPWM(speed);
 
-    // Apply holding power when no outtake buttons are pressed
+    // Apply braking when no outtake buttons are pressed (like drivetrain)
     if (safeSpeed == 0) {
-        // Use small forward power to hold position and prevent rolling back
-        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
-        outtakeLeft.setSpeed(holdPower, false);
-        outtakeRight.setSpeed(holdPower, false);
+        // Check for reverse hold mode (SELECT button pressed and limit switch encountered)
+        if (reverseHoldModeActive) {
+            // Reverse hold mode: apply 20% reverse holding power
+            int reverseHoldPower = -PWMUtils::percentageToPWM(config::tuning::OUTTAKE_REVERSE_HOLD_POWER_PERCENT);
+            outtakeLeft.setSpeed(reverseHoldPower);
+            outtakeRight.setSpeed(reverseHoldPower);
+            setServoAngle(config::BALL_SERVO_CHANNEL, config::tuning::BALL_SERVO_CLOSE_ANGLE);
+            setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
+        } else if (holdingPowerDisabled) {
+            // SELECT button mode: no holding power at all
+            outtakeLeft.setSpeed(0);
+            outtakeRight.setSpeed(0);
+        } else if (!config::tuning::LIMIT_SWITCH_DISABLED && readLimitSwitch()) {
+            // Limit switch is active - stop motors and close both servos
+            outtakeLeft.setSpeed(0);
+            outtakeRight.setSpeed(0);
+            setServoAngle(config::BALL_SERVO_CHANNEL, config::tuning::BALL_SERVO_CLOSE_ANGLE);
+            setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
+
+        } else {
+            // Normal operation: apply holding power
+            int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+            outtakeLeft.setSpeed(holdPower);
+            outtakeRight.setSpeed(holdPower);
+        }
     } else {
         // Normal speed control when moving
-        outtakeLeft.setSpeed(safeSpeed, false);
-        outtakeRight.setSpeed(safeSpeed, false);
+        outtakeLeft.setSpeed(safeSpeed);
+        outtakeRight.setSpeed(safeSpeed);
     }
 }
 
 void Robot::stopAllMotors() {
-    // Use literal 0 for better performance than constant lookup
-    // Enable braking for better stopping control on all motors
-    driveLeft.setSpeed(0, false);
-    driveRight.setSpeed(0, false);
-    outtakeLeft.setSpeed(0, false);
-    outtakeRight.setSpeed(0, false);
+    // Simple VEX/FTC-style motor control - braking handled automatically
+    driveLeft.setSpeed(0);
+    driveRight.setSpeed(0);
+    outtakeLeft.setSpeed(0);
+    outtakeRight.setSpeed(0);
 }
 
 void Robot::brakeAllMotors() {
@@ -572,30 +851,27 @@ void Robot::coastAllMotors() {
     outtakeRight.coast();
 }
 
-bool Robot::detectTurningMovement(int leftPWM, int rightPWM) {
-    // Performance-optimized turning detection with fast math
-    const int speed_difference = FAST_ABS(leftPWM - rightPWM);
+void Robot::handleFruitIntakeServos(const ControllerState& controllerState) {
+    // Handle continuous servo control for fruit intake
+    // A button (Square) = down/intake, X button (Cross) = up/outtake
 
-    // Use bit shifting for division by 2 (faster than division)
-    const int average_speed = (FAST_ABS(leftPWM) + FAST_ABS(rightPWM)) >> 1;
-
-    // Use pre-computed multiplier for percentage conversion
-    const int difference_percent = (speed_difference * config::performance::PWM_TO_PERCENT_MULTIPLIER);
-    const int average_percent = (average_speed * config::performance::PWM_TO_PERCENT_MULTIPLIER);
-
-    // Use config turn threshold directly
-    int turn_threshold = config::tuning::TURN_DETECTION_THRESHOLD;
-
-    // Detect turning based on:
-    // 1. Significant speed difference between motors
-    // 2. Motors moving in opposite directions (differential steering)
-    // 3. One motor significantly faster than the other during forward/reverse
-    bool significant_difference = difference_percent > turn_threshold;
-    bool opposite_directions = (leftPWM > 0 && rightPWM < 0) || (leftPWM < 0 && rightPWM > 0);
-    constexpr int MIN_SPEED_FOR_TURN_DETECTION = 10; // Minimum speed percentage to detect turns
-    bool coordinated_turn = average_percent > MIN_SPEED_FOR_TURN_DETECTION && significant_difference;
-
-    return opposite_directions || (coordinated_turn && significant_difference);
+    if (controllerState.square_pressed && controllerState.cross_pressed) {
+        // Both buttons pressed - stop both servos
+        setServoSpeed(config::FRUIT_INTAKE_LEFT_SERVO_CHANNEL, 0);
+        setServoSpeed(config::FRUIT_INTAKE_RIGHT_SERVO_CHANNEL, 0);
+    } else if (controllerState.square_pressed) {
+        // A button pressed - turn down/intake (servo 4 forward, servo 5 reverse)
+        setServoSpeed(config::FRUIT_INTAKE_LEFT_SERVO_CHANNEL, config::tuning::FRUIT_INTAKE_SERVO_SPEED);
+        setServoSpeed(config::FRUIT_INTAKE_RIGHT_SERVO_CHANNEL, -config::tuning::FRUIT_INTAKE_SERVO_SPEED);
+    } else if (controllerState.cross_pressed) {
+        // X button pressed - turn up/outtake (servo 4 reverse, servo 5 forward)
+        setServoSpeed(config::FRUIT_INTAKE_LEFT_SERVO_CHANNEL, -config::tuning::FRUIT_INTAKE_SERVO_SPEED);
+        setServoSpeed(config::FRUIT_INTAKE_RIGHT_SERVO_CHANNEL, config::tuning::FRUIT_INTAKE_SERVO_SPEED);
+    } else {
+        // No buttons pressed - stop both servos
+        setServoSpeed(config::FRUIT_INTAKE_LEFT_SERVO_CHANNEL, 0);
+        setServoSpeed(config::FRUIT_INTAKE_RIGHT_SERVO_CHANNEL, 0);
+    }
 }
 
 bool Robot::handleServoToggle(uint8_t channel, bool& toggleState, int openAngle, int closeAngle) {
@@ -675,59 +951,72 @@ void Robot::initLEDStrip() {
     if (WS2812BStrip::init()) {
         DEBUG_PRINTLN("WS2812B LED strip initialized successfully");
 
-        // Quick initialization test without blocking delays
-        DEBUG_PRINTLN("LED strip quick test - brief flash");
-        WS2812BStrip::powerOn();
-        WS2812BStrip::setSolidColor(0, 255, 0); // Green to indicate successful init
-        WS2812BStrip::show();
-        delay(100); // Very brief flash - won't disrupt PS2 controller
+        // Run startup sequence for visual feedback
+        WS2812BStrip::startupSequence();
 
-        // Clear and prepare for normal operation
         DEBUG_PRINTLN("LED strip ready for normal operation");
-        WS2812BStrip::clear();
-        WS2812BStrip::show();
     } else {
         ERROR_PRINTLN("WS2812B LED strip initialization failed");
     }
 }
 
 void Robot::updateLEDStrip() {
-    // Update LED strip based on current robot state
+    // Update LED strip based on current robot state and system conditions
     config::RobotState currentState = stateMachine.getCurrentState();
-
-    // Enable power for active states, disable for off states
     bool should_be_powered = false;
+    uint8_t led_status = config::led_status::OFF;
 
-    switch (currentState) {
-        case config::IDLE:
-            WS2812BStrip::setRobotStatus(1); // Idle - blue breathing
-            should_be_powered = true;
-            break;
-        case config::MANUAL_CONTROL:
-            WS2812BStrip::setRobotStatus(2); // Manual - solid green
-            should_be_powered = true;
-            break;
-        case config::AUTOMATIC_OUTTAKE_REVERSE:
-        case config::TIMED_OUTTAKE_FORWARD:
-            WS2812BStrip::setRobotStatus(3); // Auto - rainbow
-            should_be_powered = true;
-            break;
-        default:
-            WS2812BStrip::setRobotStatus(0); // Off
-            should_be_powered = false;
-            break;
+    // Priority 1: System errors (highest priority)
+    if (!isSystemHealthy() || !SafetyMonitor::isSystemSafe()) {
+        // Check specific error types for more informative display
+        if (!hal_pca9685_is_connected()) {
+            led_status = config::led_status::I2C_ERROR;
+        } else {
+            // For now, use generic system error - temperature monitoring is internal to SafetyMonitor
+            led_status = config::led_status::SYSTEM_ERROR;
+        }
+        should_be_powered = true;
+    }
+    // Priority 2: Controller safety shutdown
+    else if (SafetyMonitor::isControllerSafetyShutdownActive()) {
+        led_status = config::led_status::CONTROLLER_SAFETY;
+        should_be_powered = true;
+    }
+    // Priority 3: Controller connection status
+    else if (!isConnected()) {
+        led_status = config::led_status::CONTROLLER_DISCONNECTED;
+        should_be_powered = true;
+    }
+    // Priority 4: Limit switch status (when active and not disabled)
+    else if (!config::tuning::LIMIT_SWITCH_DISABLED && readLimitSwitch()) {
+        led_status = config::led_status::LIMIT_SWITCH_ACTIVE;
+        should_be_powered = true;
+    }
+    // Priority 5: Normal robot state
+    else {
+        switch (currentState) {
+            case config::IDLE:
+                led_status = config::led_status::IDLE;
+                should_be_powered = true;
+                break;
+            case config::MANUAL_CONTROL:
+                led_status = config::led_status::MANUAL_CONTROL;
+                should_be_powered = true;
+                break;
+            case config::AUTOMATIC_OUTTAKE_REVERSE:
+            case config::TIMED_OUTTAKE_FORWARD:
+                led_status = config::led_status::AUTOMATIC_MODE;
+                should_be_powered = true;
+                break;
+            default:
+                led_status = config::led_status::OFF;
+                should_be_powered = false;
+                break;
+        }
     }
 
-    // Check for controller safety shutdown (different from system errors)
-    if (SafetyMonitor::isControllerSafetyShutdownActive()) {
-        WS2812BStrip::setRobotStatus(5); // Controller safety - orange/yellow warning
-        should_be_powered = true; // Show safety warning
-    }
-    // Check for system error conditions
-    else if (!isSystemHealthy() || !SafetyMonitor::isSystemSafe()) {
-        WS2812BStrip::setRobotStatus(4); // Error - red blinking
-        should_be_powered = true; // Show error even if system is unhealthy
-    }
+    // Set the LED status
+    WS2812BStrip::setRobotStatus(led_status);
 
     // Control power based on state
     if (should_be_powered && !WS2812BStrip::isPowerOn()) {
@@ -740,15 +1029,7 @@ void Robot::updateLEDStrip() {
     WS2812BStrip::update();
 }
 
-void Robot::enableLEDStrip() {
-    WS2812BStrip::powerOn();
-    DEBUG_PRINTLN("LED strip power enabled");
-}
 
-void Robot::disableLEDStrip() {
-    WS2812BStrip::powerOff();
-    DEBUG_PRINTLN("LED strip power disabled");
-}
 
 // IMU Testing Functions
 void Robot::testIMU() {

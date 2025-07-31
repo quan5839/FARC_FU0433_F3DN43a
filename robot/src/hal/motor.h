@@ -3,31 +3,35 @@
 
 #include "../config.h"
 
+// Motor types for different brake configurations
+enum class MotorType {
+    DRIVE,
+    OUTTAKE
+};
+
 // BrakeMode removed - using electromagnetic braking only for FTC authenticity
 
 /**
  * @class Motor
- * @brief High-performance motor controller with mixed-decay braking system
+ * @brief Simple VEX/FTC-style motor controller with automatic braking optimization
  *
- * This class provides precise motor control using a sophisticated mixed-decay
- * braking system that combines fast decay (coasting) and slow decay (electromagnetic
- * braking) for optimal stopping performance. Optimized for 6-wheel drive robots.
+ * This class provides easy-to-use motor control similar to VEX and FTC frameworks,
+ * with sophisticated mixed-decay braking handled automatically behind the scenes.
+ * No need to worry about turning context or braking parameters.
  *
- * Mixed-Decay Braking Features:
- * - PHASE 1: Fast decay (coasting) - configurable percentage of brake time
- * - PHASE 2: Slow decay (electromagnetic braking) - remaining brake time
- * - PHASE 3: Position holding with low power electromagnetic braking
- * - Speed-dependent brake timing (200-800ms based on current motor speed)
- * - Configurable fast/slow decay ratio (default: 30% fast, 70% slow)
- * - Turn-aware braking optimization
+ * Features:
+ * - Simple setSpeed(pwm) interface like VEX motor.spin() or FTC motor.setPower()
+ * - Automatic mixed-decay braking (fast decay + electromagnetic braking)
+ * - Speed-dependent brake timing for optimal stopping performance
  * - Directional inversion support
+ * - Smooth acceleration/deceleration ramping
  * - Optimized PWM updates (only when values change)
  */
 class Motor {
 public:
-    Motor(uint8_t fwd_channel, uint8_t rev_channel, bool inverted);
+    Motor(uint8_t fwd_channel, uint8_t rev_channel, bool inverted, MotorType type = MotorType::DRIVE);
 
-    void setSpeed(int pwm, bool is_turning = false);  // Consolidated with optional turn context
+    void setSpeed(int pwm);  // Simple VEX/FTC-style interface
     void brake();  // Apply FTC-style active braking
     void coast();  // Coast to stop (disable active braking)
     void update();
@@ -52,11 +56,11 @@ private:
     uint8_t _fwd_channel;
     uint8_t _rev_channel;
     bool _inverted;
+    MotorType _motor_type;
 
     int _current_pwm = 0;
     int _target_pwm = 0;
     int _last_sent_pwm = -1;
-    bool _is_turning = false;  // Track if this motor is part of a turning movement
 
     // Mixed-decay braking state
     bool _is_braking = false;

@@ -103,16 +103,6 @@ public:
     void updateLEDStrip();
 
     /**
-     * @brief Enable LED strip power
-     */
-    void enableLEDStrip();
-
-    /**
-     * @brief Disable LED strip power
-     */
-    void disableLEDStrip();
-
-    /**
      * @brief Test IMU functionality and print readings
      */
     void testIMU();
@@ -133,6 +123,7 @@ private:
     void handleDriveInput(const ControllerState& controllerState);
     void handleOuttakeInput(const ControllerState& controllerState);
     void handleServoInput(const ControllerState& controllerState);
+    void handleFruitIntakeServos(const ControllerState& controllerState);
     void handleSpecialCommands(const ControllerState& controllerState);
 
     // Decomposed helper functions for better organization
@@ -144,10 +135,24 @@ private:
     void brakeAllMotors();  // FTC-style active braking
     void coastAllMotors();  // Coast to stop
     bool handleServoToggle(uint8_t channel, bool& toggleState, int openAngle, int closeAngle);
-    bool detectTurningMovement(int leftPWM, int rightPWM);
 
     // State machine
     StateMachine stateMachine;
+
+    // Track if automatic outtake reverse was started by select button
+    bool selectButtonOuttakeActive;
+
+    // Track if holding power should be disabled (controlled by SELECT button, independent of limit switch)
+    bool holdingPowerDisabled;
+
+    // Track if reverse hold mode is active (SELECT button pressed and limit switch encountered)
+    bool reverseHoldModeActive;
+
+    // Track if L2 was pressed during limit switch override mode
+    bool l2PressedDuringOverride;
+
+    // Track if controls are locked to outtake only (SELECT button mode)
+    bool controlsLockedToOuttake;
 
     // Error handling and recovery
     int _consecutive_errors = 0;
@@ -197,8 +202,8 @@ private:
     Motor outtakeRight;
 
     // Servo toggle state
-    bool outtakeArmToggled = false;
-    bool intakeArmToggled = false;
+    bool ballServoToggled = false;
+    bool fruitServoToggled = false;
 };
 
 #endif // ROBOT_H

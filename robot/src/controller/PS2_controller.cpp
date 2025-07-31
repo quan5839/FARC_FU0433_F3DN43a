@@ -54,6 +54,8 @@ void readController() {
         controllerState.r1_pressed = ps2.Button(PSB_R1);
         controllerState.l1_pressed = ps2.Button(PSB_L1);
         controllerState.l2_pressed = ps2.Button(PSB_L2);
+        controllerState.square_pressed = ps2.Button(PSB_SQUARE);  // A button - Fruit intake down
+        controllerState.cross_pressed = ps2.Button(PSB_CROSS);    // X button - Fruit intake up
 
         // Read and debounce toggle/command buttons
         controllerState.r2_pressed = r2Debouncer.update(ps2.Button(PSB_R2));

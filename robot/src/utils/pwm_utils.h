@@ -101,24 +101,36 @@ public:
     }
 
     /**
-     * @brief Calculate motor speeds using Cheesy Drive algorithm
+     * @brief Calculate motor speeds using Cheesy Drive algorithm with dynamic turning sensitivity
      * @param throttle Forward/backward input (-128 to +128)
      * @param wheel Turning input (-128 to +128)
      * @param leftPWM Output left motor PWM
      * @param rightPWM Output right motor PWM
      * @param maxPWM Maximum PWM value to use
      */
-    static void calculateCheesyDrive(int throttle, int wheel, int& leftPWM, int& rightPWM, int maxPWM) {
+    static void calculateDifferentialDrive(int throttle, int wheel, int& leftPWM, int& rightPWM, int maxPWM) {
         // Normalize inputs to -1.0 to +1.0 range
         float throttleNorm = (float)throttle / config::ps2::JOYSTICK_MAX;
         float wheelNorm = (float)wheel / config::ps2::JOYSTICK_MAX;
 
-        // Apply turn sensitivity (pure arcade drive - no nonlinearity)
-        float turnSensitivity = config::tuning::TURN_SENSITIVITY_PERCENT / 100.0f;
-        float maxTurnRate = turnSensitivity; // Cap turn component at the configured sensitivity level
-        float steeringComponent = wheelNorm * turnSensitivity;
+        // Calculate dynamic turning sensitivity based on forward/backward power (quadratic)
+        float baseTurnSensitivity = config::tuning::TURN_SENSITIVITY_PERCENT / 100.0f;
+        float throttleIntensity = abs(throttleNorm); // 0.0 to 1.0 based on drive power
+
+        // Square the throttle intensity for quadratic response
+        float throttleSquared = throttleIntensity * throttleIntensity;
+
+        // Dynamic turn sensitivity: minimum at 0 throttle, maximum at full throttle
+        // Formula: baseSensitivity * (minMultiplier + (maxMultiplier - minMultiplier) * throttle²)
+        float dynamicTurnSensitivity = baseTurnSensitivity *
+            (config::tuning::MIN_TURN_MULTIPLIER +
+             (config::tuning::MAX_TURN_MULTIPLIER - config::tuning::MIN_TURN_MULTIPLIER) * throttleSquared);
+
+        // Calculate steering component with dynamic sensitivity
+        float steeringComponent = wheelNorm * dynamicTurnSensitivity;
 
         // Clamp steering component to prevent excessive turning
+        float maxTurnRate = baseTurnSensitivity * config::tuning::MAX_TURN_MULTIPLIER; // Maximum possible turn rate
         if (steeringComponent > maxTurnRate) steeringComponent = maxTurnRate;
         if (steeringComponent < -maxTurnRate) steeringComponent = -maxTurnRate;
 
@@ -129,6 +141,19 @@ public:
         // Convert back to PWM values and clamp
         leftPWM = clampPWM((int)(leftMotor * maxPWM));
         rightPWM = clampPWM((int)(rightMotor * maxPWM));
+
+        // Debug output for tuning (only in debug mode)
+        #if !COMPETITION_MODE
+        static unsigned long lastDebugTime = 0;
+        if (millis() - lastDebugTime > 1000 && (throttle != 0 || wheel != 0)) { // Debug every 1 second when moving
+            DEBUG_PRINT("Dynamic Turn - Throttle: ");
+            DEBUG_PRINT((int)(throttleIntensity * 100));
+            DEBUG_PRINT("%, Turn Sensitivity: ");
+            DEBUG_PRINT((int)(dynamicTurnSensitivity * 100));
+            DEBUG_PRINTLN("%");
+            lastDebugTime = millis();
+        }
+        #endif
     }
     /**
      * @brief Apply low-pass filter to reduce joystick jitter

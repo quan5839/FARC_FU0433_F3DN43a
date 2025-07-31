@@ -2,6 +2,8 @@
 #include "pca9685_driver.h"
 #include "../config.h"
 #include <Arduino.h>
+#include <climits>  // For ULONG_MAX
+#include <cstdlib>  // For abs()
 
 // Performance optimization pragmas
 #pragma GCC optimize("O3")
@@ -13,13 +15,14 @@ template <typename T> constexpr int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
-Motor::Motor(uint8_t fwd_channel, uint8_t rev_channel, bool inverted) {
+Motor::Motor(uint8_t fwd_channel, uint8_t rev_channel, bool inverted, MotorType type) {
     _fwd_channel = fwd_channel;
     _rev_channel = rev_channel;
     _inverted = inverted;
+    _motor_type = type;
 }
 
-void Motor::setSpeed(int pwm, bool is_turning) {
+void Motor::setSpeed(int pwm) {
     int safe_pwm = _inverted ? -pwm : pwm;
 
     // Exit braking mode if new non-zero speed is commanded
@@ -36,7 +39,7 @@ void Motor::setSpeed(int pwm, bool is_turning) {
     }
 
     _target_pwm = safe_pwm;
-    _is_turning = is_turning;
+    // Note: Turning detection removed - braking optimization now handled automatically
 }
 
 void Motor::brake() {
@@ -93,8 +96,9 @@ void Motor::updateBraking() {
         _current_pwm = 0;
         _last_sent_pwm = 0;
 
-    } else if (brake_duration < _total_brake_time) {
+    } else if (brake_duration < _total_brake_time || _total_brake_time == ULONG_MAX) {
         // Phase 2: Slow Decay - Electromagnetic braking
+        // For infinite brake time (ULONG_MAX), stay in this phase indefinitely
         int brake_power = calculateBrakePower(_last_speed_before_brake);
         applyElectromagneticBrake(brake_power);
         _current_pwm = 0;
@@ -102,6 +106,7 @@ void Motor::updateBraking() {
 
     } else {
         // Phase 3: Hold - Braking complete, switch to holding or stop
+        // Note: This phase is never reached when _total_brake_time == ULONG_MAX (infinite)
         _is_braking = false;
         _current_pwm = 0;
 
@@ -239,13 +244,26 @@ void Motor::applyFastDecay() {
 }
 
 unsigned long Motor::calculateTotalBrakeTime(int current_speed) {
-    // Calculate total brake time based on current motor speed
+    // Calculate total brake time based on current motor speed and motor type
     // Higher speeds get longer brake times for better control
+
+    // Handle infinite brake time for outtake motors
+    if (_motor_type == MotorType::OUTTAKE && config::tuning::OUTTAKE_BRAKE_MAX_TIME_MS == -1) {
+        return ULONG_MAX;  // Return maximum possible value to represent infinite time
+    }
 
     const int speed_percent = (abs(current_speed) * config::constants::PERCENT_TO_DECIMAL_DIVISOR) / config::constants::PWM_MAX;
 
+    // Use different brake times based on motor type
+    unsigned long max_brake_time;
+    if (_motor_type == MotorType::OUTTAKE) {
+        max_brake_time = config::tuning::OUTTAKE_BRAKE_MAX_TIME_MS;
+    } else {
+        max_brake_time = config::tuning::BRAKE_MAX_TIME_MS;
+    }
+
     // Linear interpolation between base time and max time based on speed
-    const unsigned long time_range = config::tuning::BRAKE_MAX_TIME_MS - config::tuning::BRAKE_BASE_TIME_MS;
+    const unsigned long time_range = max_brake_time - config::tuning::BRAKE_BASE_TIME_MS;
     const unsigned long speed_based_time = (time_range * speed_percent) / config::constants::PERCENT_TO_DECIMAL_DIVISOR;
 
     return config::tuning::BRAKE_BASE_TIME_MS + speed_based_time;
@@ -255,9 +273,19 @@ void Motor::initializeMixedDecayBraking(int current_speed) {
     // Calculate timing for mixed-decay braking phases
     _total_brake_time = calculateTotalBrakeTime(current_speed);
 
+    // Use different decay percentages based on motor type
+    int fast_decay_percent, slow_decay_percent;
+    if (_motor_type == MotorType::OUTTAKE) {
+        fast_decay_percent = config::tuning::OUTTAKE_FAST_DECAY_PERCENT;
+        slow_decay_percent = config::tuning::OUTTAKE_SLOW_DECAY_PERCENT;
+    } else {
+        fast_decay_percent = config::tuning::FAST_DECAY_PERCENT;
+        slow_decay_percent = config::tuning::SLOW_DECAY_PERCENT;
+    }
+
     // Calculate phase durations based on percentages
-    _fast_decay_time = (_total_brake_time * config::tuning::FAST_DECAY_PERCENT) / config::constants::PERCENT_TO_DECIMAL_DIVISOR;
-    _slow_decay_time = (_total_brake_time * config::tuning::SLOW_DECAY_PERCENT) / config::constants::PERCENT_TO_DECIMAL_DIVISOR;
+    _fast_decay_time = (_total_brake_time * fast_decay_percent) / config::constants::PERCENT_TO_DECIMAL_DIVISOR;
+    _slow_decay_time = (_total_brake_time * slow_decay_percent) / config::constants::PERCENT_TO_DECIMAL_DIVISOR;
 
     // Ensure fast + slow decay times don't exceed total time
     if (_fast_decay_time + _slow_decay_time > _total_brake_time) {

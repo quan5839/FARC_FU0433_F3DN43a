@@ -12,6 +12,8 @@ struct ControllerState {
     bool r1_pressed;      // Precision mode - needs immediate response
     bool l1_pressed;      // Outtake forward - needs immediate response
     bool l2_pressed;      // Outtake reverse - needs immediate response
+    bool square_pressed;  // A button - Fruit intake down - needs immediate response
+    bool cross_pressed;   // X button - Fruit intake up - needs immediate response
 
     // Debounced buttons (only true for one cycle after press)
     bool r2_pressed;      // Servo toggle - needs debouncing

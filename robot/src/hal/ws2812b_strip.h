@@ -78,9 +78,14 @@ namespace WS2812BStrip {
     
     /**
      * @brief Set robot status indication
-     * @param status Robot status (0=off, 1=idle, 2=manual, 3=auto, 4=error)
+     * @param status Robot status using config::led_status constants
      */
     void setRobotStatus(uint8_t status);
+
+    /**
+     * @brief Start startup sequence animation
+     */
+    void startupSequence();
     
     /**
      * @brief Set LED strip brightness

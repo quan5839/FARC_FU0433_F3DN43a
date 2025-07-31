@@ -51,8 +51,8 @@ namespace config {
     constexpr unsigned long SAFETY_CHECK_INTERVAL_MS = 5000;
 
     // Controller input safety constants
-    constexpr bool ENABLE_CONTROLLER_INPUT_SAFETY = true;
-    constexpr unsigned long CONTROLLER_INPUT_SAFETY_TIMEOUT_MS = 5000;  // 5 seconds
+    constexpr bool ENABLE_CONTROLLER_INPUT_SAFETY = false;
+    constexpr unsigned long CONTROLLER_INPUT_SAFETY_TIMEOUT_MS = 5000;  
     constexpr int CONTROLLER_INPUT_CHANGE_THRESHOLD = 2;  // Minimum change to detect input variation
 
     // Memory optimization constants
@@ -175,8 +175,10 @@ namespace config {
   constexpr uint8_t CHAN_OUTTAKE_R_REV = 15;
 
   // Servo Channels
-  constexpr uint8_t OUTTAKE_SERVO_CHANNEL    = 2;  // PCA9685 channel for outtake servo
-  constexpr uint8_t INTAKE_SERVO_CHANNEL     = 3;  // PCA9685 channel for intake servo
+  constexpr uint8_t BALL_SERVO_CHANNEL    = 2;  // PCA9685 channel for ball servo (was outtake)
+  constexpr uint8_t FRUIT_SERVO_CHANNEL   = 3;  // PCA9685 channel for fruit servo (was intake)
+  constexpr uint8_t FRUIT_INTAKE_LEFT_SERVO_CHANNEL  = 4;  // PCA9685 channel for fruit intake left continuous servo
+  constexpr uint8_t FRUIT_INTAKE_RIGHT_SERVO_CHANNEL = 5;  // PCA9685 channel for fruit intake right continuous servo (reverse)
 
   // Sensor Pins
   constexpr uint8_t LIMIT_SWITCH_PIN = 32;
@@ -184,7 +186,22 @@ namespace config {
   // WS2812B LED Strip Control
   constexpr uint8_t WS2812B_DATA_PIN = 25;         // GPIO 25 for WS2812B data signal
   constexpr uint8_t WS2812B_POWER_CHANNEL = 7;     // PCA9685 channel 7 for power switching
-  constexpr int WS2812B_NUM_LEDS = 120;            // Number of LEDs in the strip
+  constexpr int WS2812B_NUM_LEDS = 60;            // Number of LEDs in the strip
+
+  // -- LED Status Codes --
+  namespace led_status {
+    constexpr uint8_t OFF = 0;                      // LED strip off
+    constexpr uint8_t IDLE = 1;                     // Idle state - slow blue breathing
+    constexpr uint8_t MANUAL_CONTROL = 2;           // Manual control - solid green
+    constexpr uint8_t AUTOMATIC_MODE = 3;           // Automatic mode - rainbow animation
+    constexpr uint8_t SYSTEM_ERROR = 4;             // System error - fast red blinking
+    constexpr uint8_t CONTROLLER_SAFETY = 5;        // Controller safety shutdown - orange warning
+    constexpr uint8_t CONTROLLER_DISCONNECTED = 6;  // Controller disconnected - slow red breathing
+    constexpr uint8_t TEMPERATURE_WARNING = 7;      // High temperature - yellow pulse
+    constexpr uint8_t STARTUP_SEQUENCE = 8;         // System startup - rainbow sweep
+    constexpr uint8_t I2C_ERROR = 9;                // I2C communication error - purple blink
+    constexpr uint8_t LIMIT_SWITCH_ACTIVE = 10;     // Limit switch triggered - cyan solid
+  }
 
 
 
@@ -208,7 +225,12 @@ namespace config {
     #define LIKELY(x) __builtin_expect(!!(x), 1)
     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 
-
+    // -- I2C Health Monitoring --
+    constexpr unsigned long I2C_HEALTH_CHECK_INTERVAL_MS = 10000;
+    constexpr unsigned long I2C_RESPONSE_TIMEOUT_US = 1000;
+    constexpr float I2C_MAX_ERROR_RATE = 0.1;
+    constexpr unsigned int I2C_TIMEOUT_MS = 100;
+    constexpr bool ENABLE_STANDARD_I2C_RECOVERY = true;
   }
 
   //================================================================================
@@ -219,7 +241,11 @@ namespace config {
     // -- Drive Control Performance --
     constexpr int DRIVE_MAX_SPEED_PERCENT    = 90; // Maximum speed for normal driving (0-100%)
     constexpr int DRIVE_PRECISION_SPEED_PERCENT = 17; // Maximum speed for precision mode when R1 pressed (0-100%)
-    constexpr int TURN_SENSITIVITY_PERCENT   = 35; // Turn sensitivity - higher = more responsive turning (0-100%)
+    constexpr int TURN_SENSITIVITY_PERCENT   = 37; // Base turn sensitivity - higher = more responsive turning (0-100%)
+
+    // -- Dynamic Turning Sensitivity --
+    constexpr float MIN_TURN_MULTIPLIER = 1.0f;  // Turn sensitivity when not moving (100% of base)
+    constexpr float MAX_TURN_MULTIPLIER = 2.0f;  // Turn sensitivity at full speed (200% of base)
 
     // Pre-calculated PWM values for performance optimization
     constexpr int DRIVE_MAX_SPEED_PWM = (constants::PWM_MAX * DRIVE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;        // 3685 PWM units (90%)
@@ -229,21 +255,26 @@ namespace config {
     constexpr int OUTTAKE_MAX_SPEED_PERCENT = 100;  // Outtake motors always run at full power (0-100%)
     constexpr int OUTTAKE_PWM = (constants::PWM_MAX * OUTTAKE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;              // 4095 PWM units (full power)
     constexpr int OUTTAKE_HOLD_POWER_PERCENT = 10;  // Forward holding power to prevent rolling back (0-100%)
+    constexpr int OUTTAKE_REVERSE_HOLD_POWER_PERCENT = 7;  // Reverse holding power when limit switch is active (0-100%)
 
-    // -- Motor Braking Configuration --
+    // -- Motor Braking Configuration (Drive Motors) --
     constexpr bool ENABLE_ACTIVE_BRAKING = true;
     constexpr int BRAKE_POWER_PERCENT = 100;
-    constexpr int BRAKE_THRESHOLD_PERCENT = 5;
-    constexpr int TURN_DETECTION_THRESHOLD = 5;
+    constexpr int BRAKE_THRESHOLD_PERCENT = 1;
     constexpr int BRAKE_BASE_TIME_MS = 50;
-    constexpr int BRAKE_MAX_TIME_MS = 300;
+    constexpr int BRAKE_MAX_TIME_MS = 300;    // Normal brake time for drive motors
     constexpr int BRAKE_HOLD_POWER_PERCENT = 100;
-    constexpr int FAST_DECAY_PERCENT = 30;
-    constexpr int SLOW_DECAY_PERCENT = 70;
+    constexpr int FAST_DECAY_PERCENT = 30;    // Normal coasting for drive motors
+    constexpr int SLOW_DECAY_PERCENT = 70;    // Normal electromagnetic braking for drive motors
+
+    // -- Outtake Motor Braking Configuration --
+    constexpr int OUTTAKE_BRAKE_MAX_TIME_MS = -1;     // Infinite brake time (never timeout)
+    constexpr int OUTTAKE_FAST_DECAY_PERCENT = 0;     // No coasting - immediate electromagnetic braking
+    constexpr int OUTTAKE_SLOW_DECAY_PERCENT = 100;   // 100% electromagnetic braking
 
     // -- Motor Ramping --
     constexpr bool ENABLE_MOTOR_RAMPING = true;
-    constexpr int ACCELERATION_TIME_MS = 300;
+    constexpr int ACCELERATION_TIME_MS = 0;
     constexpr int DECELERATION_TIME_MS = 100;
 
 
@@ -254,10 +285,13 @@ namespace config {
     constexpr int OUTTAKE_FORWARD_TIMEOUT_MS = 1500;
 
     // -- Servo Angles --
-    constexpr int INTAKE_ARM_CLOSE_ANGLE = 140;
-    constexpr int INTAKE_ARM_OPEN_ANGLE = 45;
-    constexpr int OUTTAKE_ARM_OPEN_ANGLE = 145;
-    constexpr int OUTTAKE_ARM_CLOSE_ANGLE = 45;
+    constexpr int FRUIT_SERVO_CLOSE_ANGLE = 140;
+    constexpr int FRUIT_SERVO_OPEN_ANGLE = 45;
+    constexpr int BALL_SERVO_OPEN_ANGLE = 145;
+    constexpr int BALL_SERVO_CLOSE_ANGLE = 45;
+
+    // -- Continuous Servo Speeds --
+    constexpr int FRUIT_INTAKE_SERVO_SPEED = 100;  // Speed for fruit intake servos (0-100%, positive = down/intake)
 
     // -- Runtime Settings --
     inline bool INVERT_DRIVE_LEFT = false;
@@ -280,6 +314,48 @@ namespace config {
     constexpr uint8_t WS2812B_DEFAULT_VAL = 128;                // Default value/brightness
     constexpr int WS2812B_POWER_ON_PWM = 4095;                  // Full PWM to enable power via PCA9685
     constexpr int WS2812B_POWER_OFF_PWM = 0;                    // Zero PWM to disable power via PCA9685
+
+    // -- LED Animation Constants --
+    constexpr unsigned long STARTUP_SEQUENCE_DURATION_MS = 3000; // 3 second startup sequence
+    constexpr int STARTUP_ANIMATION_FPS = 20;                    // 20 FPS for smooth animation
+    constexpr int STARTUP_FRAME_DELAY_MS = 50;                   // 50ms delay between frames
+    constexpr uint8_t STARTUP_SWEEP_SPEED = 8;                   // Speed multiplier for startup sweep
+    constexpr int STARTUP_SWEEP_TAIL_LENGTH = 10;               // Length of rainbow tail in startup
+    constexpr int STARTUP_SWEEP_EXTRA_RANGE = 20;               // Extra range for sweep animation
+    constexpr uint8_t STARTUP_HUE_STEP = 25;                    // Hue step between LEDs in startup
+    constexpr uint8_t STARTUP_HUE_SPEED = 5;                    // Hue animation speed
+
+    // -- LED Color Constants (HSV Hue values 0-255) --
+    constexpr uint8_t LED_HUE_RED = 0;                          // Red hue
+    constexpr uint8_t LED_HUE_ORANGE = 30;                      // Orange hue
+    constexpr uint8_t LED_HUE_YELLOW = 60;                      // Yellow hue
+    constexpr uint8_t LED_HUE_GREEN = 120;                      // Green hue
+    constexpr uint8_t LED_HUE_BLUE = 160;                       // Blue hue
+    constexpr uint8_t LED_HUE_CYAN = 180;                       // Cyan hue
+    constexpr uint8_t LED_HUE_PURPLE = 200;                     // Purple hue
+
+    // -- LED Animation Speed Constants --
+    constexpr uint8_t LED_SPEED_SLOW = 1;                       // Slow animation speed
+    constexpr uint8_t LED_SPEED_MEDIUM = 2;                     // Medium animation speed
+    constexpr uint8_t LED_SPEED_NORMAL = 3;                     // Normal animation speed
+    constexpr uint8_t LED_SPEED_FAST = 5;                       // Fast animation speed
+
+    // -- LED Blink Pattern Constants --
+    constexpr uint8_t LED_BLINK_FAST_DIVISOR = 5;               // Fast blink rate (animation_counter / 5)
+    constexpr uint8_t LED_BLINK_SLOW_DIVISOR = 8;               // Slow blink rate (animation_counter / 8)
+    constexpr uint8_t LED_BREATHING_MULTIPLIER = 2;             // Breathing speed multiplier
+    constexpr uint8_t LED_PULSE_MULTIPLIER = 3;                 // Pulse speed multiplier
+
+    // -- LED Hardware Test Constants --
+    constexpr uint8_t LED_TEST_BRIGHTNESS = 255;                // Full brightness for hardware test
+    constexpr int LED_TEST_COUNT = 10;                          // Number of LEDs to test
+    constexpr int LED_TEST_DELAY_MS = 500;                      // Delay between test steps
+    constexpr int LED_TEST_COLOR_CYCLE = 3;                     // RGB color cycle for test
+
+    // -- LED Transition Constants --
+    constexpr unsigned long LED_TRANSITION_DURATION_MS = 500;   // Smooth transition duration
+    constexpr uint8_t LED_TRANSITION_STEPS = 50;                // Number of transition steps
+    constexpr unsigned long LED_FADE_STEP_MS = 10;              // Time between fade steps
 
 
 
