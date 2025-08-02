@@ -56,8 +56,16 @@ unsigned long StateMachine::getStateTimeoutMs(config::RobotState state) const {
             return config::tuning::OUTTAKE_TIMEOUT_MS + config::constants::TIMEOUT_SAFETY_MARGIN_MS;
         case config::TIMED_OUTTAKE_FORWARD:
             return config::tuning::OUTTAKE_FORWARD_TIMEOUT_MS + config::constants::TIMEOUT_SAFETY_MARGIN_MS;
+        // Homing sequence states have timeouts for safety
+        case config::HOMING_INITIAL_CLEARANCE:
+        case config::HOMING_FAST_APPROACH:
+        case config::HOMING_RETRACTION:
+        case config::HOMING_SLOW_APPROACH:
+        case config::HOMING_FINAL_POSITION:
+            return config::tuning::HOMING_TIMEOUT_MS;
         case config::IDLE:
         case config::MANUAL_CONTROL:
+        case config::HOMING_COMPLETE:
         default:
             return 0; // No timeout for these states
     }
@@ -69,6 +77,12 @@ const char* StateMachine::getStateName(config::RobotState state) const {
         case config::MANUAL_CONTROL: return "MANUAL_CONTROL";
         case config::AUTOMATIC_OUTTAKE_REVERSE: return "AUTOMATIC_OUTTAKE_REVERSE";
         case config::TIMED_OUTTAKE_FORWARD: return "TIMED_OUTTAKE_FORWARD";
+        case config::HOMING_INITIAL_CLEARANCE: return "HOMING_INITIAL_CLEARANCE";
+        case config::HOMING_FAST_APPROACH: return "HOMING_FAST_APPROACH";
+        case config::HOMING_RETRACTION: return "HOMING_RETRACTION";
+        case config::HOMING_SLOW_APPROACH: return "HOMING_SLOW_APPROACH";
+        case config::HOMING_FINAL_POSITION: return "HOMING_FINAL_POSITION";
+        case config::HOMING_COMPLETE: return "HOMING_COMPLETE";
         default: return "UNKNOWN";
     }
 }

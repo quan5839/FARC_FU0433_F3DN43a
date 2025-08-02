@@ -51,9 +51,9 @@ namespace config {
     constexpr unsigned long SAFETY_CHECK_INTERVAL_MS = 5000;
 
     // Controller input safety constants
-    constexpr bool ENABLE_CONTROLLER_INPUT_SAFETY = false;
-    constexpr unsigned long CONTROLLER_INPUT_SAFETY_TIMEOUT_MS = 5000;  
-    constexpr int CONTROLLER_INPUT_CHANGE_THRESHOLD = 2;  // Minimum change to detect input variation
+    constexpr bool ENABLE_CONTROLLER_INPUT_SAFETY = true;
+    constexpr unsigned long CONTROLLER_INPUT_SAFETY_TIMEOUT_MS = 10000;  
+    constexpr int CONTROLLER_INPUT_CHANGE_THRESHOLD = 1;  // Minimum change to detect input variation
 
     // Memory optimization constants
     constexpr size_t PWM_CALCULATION_POOL_SIZE = 4;
@@ -97,6 +97,7 @@ namespace config {
     AUTOMATIC_OUTTAKE_REVERSE,
     TIMED_OUTTAKE_FORWARD,
     // Homing sequence states (3D printer style)
+    HOMING_INITIAL_CLEARANCE,
     HOMING_FAST_APPROACH,
     HOMING_RETRACTION,
     HOMING_SLOW_APPROACH,
@@ -207,11 +208,12 @@ namespace config {
     constexpr uint8_t STARTUP_SEQUENCE = 8;         // System startup - rainbow sweep
     constexpr uint8_t I2C_ERROR = 9;                // I2C communication error - purple blink
     constexpr uint8_t LIMIT_SWITCH_ACTIVE = 10;     // Limit switch triggered - cyan solid
-    // Homing sequence status codes (3D printer style)
-    constexpr uint8_t HOMING_FAST = 11;             // Fast approach phase - fast white pulse
-    constexpr uint8_t HOMING_RETRACT = 12;          // Retraction phase - slow white pulse
-    constexpr uint8_t HOMING_SLOW = 13;             // Slow approach phase - very slow white pulse
-    constexpr uint8_t HOMING_FINAL = 14;            // Final positioning - white breathing
+    // Homing sequence status codes
+    constexpr uint8_t HOMING_INITIAL = 11;          // Initial clearance phase - orange pulse
+    constexpr uint8_t HOMING_FAST = 12;             // Fast approach phase - fast blue pulse
+    constexpr uint8_t HOMING_RETRACT = 13;          // Retraction phase - slow yellow pulse
+    constexpr uint8_t HOMING_SLOW = 14;             // Slow approach phase - slow blue pulse
+    constexpr uint8_t HOMING_FINAL = 15;            // Final positioning - green pulse
   }
 
 
@@ -267,14 +269,7 @@ namespace config {
     constexpr int OUTTAKE_PWM = (constants::PWM_MAX * OUTTAKE_MAX_SPEED_PERCENT) / constants::PERCENT_TO_DECIMAL_DIVISOR;              // 4095 PWM units (full power)
     constexpr int OUTTAKE_HOLD_POWER_PERCENT = 10;  // Forward holding power to prevent rolling back (0-100%)
     constexpr int OUTTAKE_REVERSE_HOLD_POWER_PERCENT = 7;  // Reverse holding power when limit switch is active (0-100%)
-
-    // -- Outtake Homing Configuration (3D Printer Style) --
-    constexpr bool ENABLE_STARTUP_HOMING = true;     // Enable automatic homing on startup
-    constexpr int HOMING_FAST_SPEED_PERCENT = 50;    // Fast approach speed for initial homing (0-100%)
-    constexpr int HOMING_SLOW_SPEED_PERCENT = 15;    // Slow precision speed for final homing (0-100%)
-    constexpr int HOMING_BUMP_DISTANCE_MS = 200;     // Time-based retraction distance (milliseconds)
-    constexpr int HOMING_TIMEOUT_MS = 10000;         // Maximum time allowed for homing sequence (10 seconds)
-    constexpr int HOMING_SAFE_POSITION_MS = 500;     // Time to move to safe position above home (milliseconds)
+    constexpr int OUTTAKE_SELECT_SPEED_PERCENT = 75;  // SELECT button outtake reverse speed (0-100%)
 
     // -- Motor Braking Configuration (Drive Motors) --
     constexpr bool ENABLE_ACTIVE_BRAKING = true;
@@ -300,6 +295,7 @@ namespace config {
 
 
     // -- Timeouts --
+    constexpr int OUTTAKE_SELECT_TIMEOUT_MS = 2500;
     constexpr int OUTTAKE_TIMEOUT_MS = 1500;
     constexpr int OUTTAKE_FORWARD_TIMEOUT_MS = 1500;
 
@@ -322,6 +318,15 @@ namespace config {
     // -- PS2 Controller --
     constexpr int CONNECTION_TIMEOUT_MS = 1000;
     constexpr int RECONNECTION_ATTEMPT_INTERVAL_MS = 1000;
+
+    // -- Homing Sequence (3D Printer Style) --
+    constexpr bool ENABLE_STARTUP_HOMING = false;           // Enable automatic homing on startup
+    constexpr int HOMING_FAST_SPEED_PERCENT = 50;          // Fast approach speed (like 3D printer fast homing)
+    constexpr int HOMING_SLOW_SPEED_PERCENT = 30;          // Slow precision speed (like 3D printer precision homing)
+    constexpr unsigned long HOMING_TIMEOUT_MS = 10000;     // Total homing timeout (10 seconds)
+    constexpr unsigned long HOMING_INITIAL_CLEARANCE_MS = 400; // Initial clearance time if switch already triggered
+    constexpr unsigned long HOMING_BUMP_DISTANCE_MS = 750; // Retraction time after first contact (like bump distance)
+    constexpr unsigned long HOMING_SAFE_POSITION_MS = 1000; // Time to move to safe operating position
 
 
 

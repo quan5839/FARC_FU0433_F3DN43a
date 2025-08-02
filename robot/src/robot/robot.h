@@ -73,6 +73,17 @@ public:
     bool readLimitSwitch();
 
     /**
+     * @brief Start the 3D printer style homing sequence.
+     */
+    void startHomingSequence();
+
+    /**
+     * @brief Check if homing sequence is complete.
+     * @return true if homing is complete, false if still in progress.
+     */
+    bool isHomingComplete() const;
+
+    /**
      * @brief Perform comprehensive I2C health diagnostics.
      */
     void performI2CHealthCheck();
@@ -136,6 +147,13 @@ private:
     void coastAllMotors();  // Coast to stop
     bool handleServoToggle(uint8_t channel, bool& toggleState, int openAngle, int closeAngle);
 
+    // Homing sequence helper methods
+    void updateHomingInitialClearance();
+    void updateHomingFastApproach();
+    void updateHomingRetraction();
+    void updateHomingSlowApproach();
+    void updateHomingFinalPosition();
+
     // State machine
     StateMachine stateMachine;
 
@@ -154,7 +172,7 @@ private:
     // Track if controls are locked to outtake only (SELECT button mode)
     bool controlsLockedToOuttake;
 
-    // Homing sequence state variables
+    // Homing sequence state
     bool homingComplete;
     unsigned long homingStartTime;
     unsigned long homingPhaseStartTime;
@@ -167,14 +185,6 @@ private:
     void handleSystemError();
     void resetErrorCounter();
     bool isSystemHealthy();
-
-    // Homing sequence functions (3D printer style)
-    void startHomingSequence();
-    void updateHomingFastApproach();
-    void updateHomingRetraction();
-    void updateHomingSlowApproach();
-    void updateHomingFinalPosition();
-    bool isHomingComplete() const;
 
 
 

@@ -117,10 +117,13 @@ void Robot::loop() {
                 setRobotState(config::MANUAL_CONTROL);
                 break;
             }
-            const int outtakePWM = PWMUtils::getOuttakePWM();
-            outtakeLeft.setSpeed(-outtakePWM);
-            outtakeRight.setSpeed(-outtakePWM);
-            if (stateMachine.getStateElapsedTime() > config::tuning::OUTTAKE_TIMEOUT_MS) {
+            // Use 75% speed for SELECT button outtake, 100% for other triggers
+            const int outtakeSpeed = selectButtonOuttakeActive ?
+                PWMUtils::percentageToPWM(config::tuning::OUTTAKE_SELECT_SPEED_PERCENT) :
+                PWMUtils::getOuttakePWM();
+            outtakeLeft.setSpeed(-outtakeSpeed);
+            outtakeRight.setSpeed(-outtakeSpeed);
+            if (stateMachine.getStateElapsedTime() > config::tuning::OUTTAKE_SELECT_TIMEOUT_MS) {
                 // Timeout reached - stop automatic outtake but keep holding power disabled
                 selectButtonOuttakeActive = false;
                 setRobotState(config::MANUAL_CONTROL);
@@ -138,6 +141,9 @@ void Robot::loop() {
         }
 
         // === HOMING SEQUENCE STATES (3D Printer Style) ===
+        case config::HOMING_INITIAL_CLEARANCE:
+            updateHomingInitialClearance();
+            break;
         case config::HOMING_FAST_APPROACH:
             updateHomingFastApproach();
             break;
@@ -270,9 +276,10 @@ void Robot::handleSpecialCommands(const ControllerState& controllerState) {
         DEBUG_PRINTLN("EMERGENCY: Aborting homing sequence");
         ERROR_PRINTLN("HOMING ABORTED: Manual abort by user");
 
-        // Stop all motors immediately
-        outtakeLeft.setSpeed(0);
-        outtakeRight.setSpeed(0);
+        // Apply holding power to prevent slide from falling during emergency abort
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
 
         // Mark homing as complete to allow normal operation
         homingComplete = true;
@@ -326,7 +333,7 @@ void Robot::handleSpecialCommands(const ControllerState& controllerState) {
         }
     }
     if (controllerState.pad_down_pressed) {
-        if (!config::tuning::LIMIT_SWITCH_DISABLED) {
+        if (!config::tuning::LIMIT_SWITCH_DISABLED && !selectButtonOuttakeActive) {
             automaticOuttakeReverse();
         }
     }
@@ -840,8 +847,8 @@ void Robot::setOuttakeMotorSpeeds(int speed) {
     // Apply braking when no outtake buttons are pressed (like drivetrain)
     if (safeSpeed == 0) {
         // Check for reverse hold mode (SELECT button pressed and limit switch encountered)
-        if (reverseHoldModeActive) {
-            // Reverse hold mode: apply 20% reverse holding power
+        if (reverseHoldModeActive && holdingPowerDisabled) {
+            // Reverse hold mode: apply reverse holding power (only when SELECT button hanging mode is active)
             int reverseHoldPower = -PWMUtils::percentageToPWM(config::tuning::OUTTAKE_REVERSE_HOLD_POWER_PERCENT);
             outtakeLeft.setSpeed(reverseHoldPower);
             outtakeRight.setSpeed(reverseHoldPower);
@@ -852,7 +859,7 @@ void Robot::setOuttakeMotorSpeeds(int speed) {
             outtakeLeft.setSpeed(0);
             outtakeRight.setSpeed(0);
         } else if (!config::tuning::LIMIT_SWITCH_DISABLED && readLimitSwitch()) {
-            // Limit switch is active - stop motors and close both servos
+            // Normal mode: Limit switch is active - turn off holding power completely
             outtakeLeft.setSpeed(0);
             outtakeRight.setSpeed(0);
             setServoAngle(config::BALL_SERVO_CHANNEL, config::tuning::BALL_SERVO_CLOSE_ANGLE);
@@ -877,6 +884,10 @@ void Robot::stopAllMotors() {
     driveRight.setSpeed(0);
     outtakeLeft.setSpeed(0);
     outtakeRight.setSpeed(0);
+
+    // Move servos to safe positions during controller timeout
+    setServoAngle(config::BALL_SERVO_CHANNEL, config::tuning::BALL_SERVO_CLOSE_ANGLE);
+    setServoAngle(config::FRUIT_SERVO_CHANNEL, config::tuning::FRUIT_SERVO_CLOSE_ANGLE);
 }
 
 void Robot::brakeAllMotors() {
@@ -1025,6 +1036,9 @@ void Robot::updateLEDStrip() {
     else if (!isHomingComplete()) {
         // Show different colors for different homing phases
         switch (currentState) {
+            case config::HOMING_INITIAL_CLEARANCE:
+                led_status = config::led_status::HOMING_INITIAL;
+                break;
             case config::HOMING_FAST_APPROACH:
                 led_status = config::led_status::HOMING_FAST;
                 break;
@@ -1038,7 +1052,7 @@ void Robot::updateLEDStrip() {
                 led_status = config::led_status::HOMING_FINAL;
                 break;
             default:
-                led_status = config::led_status::HOMING_FAST;
+                led_status = config::led_status::HOMING_INITIAL;
                 break;
         }
         should_be_powered = true;
@@ -1208,12 +1222,62 @@ void Robot::startHomingSequence() {
     }
 
     DEBUG_PRINTLN("=== STARTING OUTTAKE HOMING SEQUENCE ===");
-    DEBUG_PRINTLN("Phase 1: Fast approach to limit switch");
 
     homingComplete = false;
     homingStartTime = millis();
     homingPhaseStartTime = millis();
-    setRobotState(config::HOMING_FAST_APPROACH);
+
+    // Check if limit switch is already triggered at startup
+    if (readLimitSwitch()) {
+        DEBUG_PRINTLN("Initial state: Limit switch already triggered");
+        DEBUG_PRINTLN("Phase 0: Initial clearance to ensure proper homing");
+        setRobotState(config::HOMING_INITIAL_CLEARANCE);
+    } else {
+        DEBUG_PRINTLN("Initial state: Limit switch clear");
+        DEBUG_PRINTLN("Phase 1: Fast approach to limit switch");
+        setRobotState(config::HOMING_FAST_APPROACH);
+    }
+}
+
+void Robot::updateHomingInitialClearance() {
+    // Phase 0: Clear limit switch if already triggered at startup
+    const unsigned long phaseElapsed = millis() - homingPhaseStartTime;
+    const unsigned long totalElapsed = millis() - homingStartTime;
+
+    // Safety timeout check
+    if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
+        ERROR_PRINTLN("HOMING FAILED: Timeout during initial clearance");
+
+        // Apply holding power to prevent slide from falling on timeout
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
+        homingComplete = true;
+        setRobotState(config::MANUAL_CONTROL);
+        return;
+    }
+
+    // Check if clearance time is complete
+    if (phaseElapsed >= config::tuning::HOMING_INITIAL_CLEARANCE_MS) {
+        DEBUG_PRINTLN("Phase 0 complete: Initial clearance finished");
+        DEBUG_PRINTLN("Phase 1: Fast approach to limit switch");
+
+        // Apply holding power to prevent sliding down during transition
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
+        // Move to fast approach phase
+        homingPhaseStartTime = millis();
+        setRobotState(config::HOMING_FAST_APPROACH);
+        return;
+    }
+
+    // Continue initial clearance upward to clear the switch
+    int clearanceSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
+    outtakeLeft.setSpeed(clearanceSpeed);
+    outtakeRight.setSpeed(clearanceSpeed);
 }
 
 void Robot::updateHomingFastApproach() {
@@ -1223,6 +1287,12 @@ void Robot::updateHomingFastApproach() {
     // Safety timeout check
     if (elapsed > config::tuning::HOMING_TIMEOUT_MS) {
         ERROR_PRINTLN("HOMING FAILED: Timeout during fast approach");
+
+        // Apply holding power to prevent slide from falling on timeout
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
         homingComplete = true;  // Mark as complete to prevent blocking
         setRobotState(config::MANUAL_CONTROL);
         return;
@@ -1233,9 +1303,10 @@ void Robot::updateHomingFastApproach() {
         DEBUG_PRINTLN("Phase 1 complete: Limit switch triggered");
         DEBUG_PRINTLN("Phase 2: Retracting for precision approach");
 
-        // Stop motors immediately
-        outtakeLeft.setSpeed(0);
-        outtakeRight.setSpeed(0);
+        // Apply holding power to prevent sliding down during transition
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
 
         // Move to retraction phase
         homingPhaseStartTime = millis();
@@ -1257,6 +1328,12 @@ void Robot::updateHomingRetraction() {
     // Safety timeout check
     if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
         ERROR_PRINTLN("HOMING FAILED: Timeout during retraction");
+
+        // Apply holding power to prevent slide from falling on timeout
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
         homingComplete = true;
         setRobotState(config::MANUAL_CONTROL);
         return;
@@ -1267,9 +1344,10 @@ void Robot::updateHomingRetraction() {
         DEBUG_PRINTLN("Phase 2 complete: Retraction finished");
         DEBUG_PRINTLN("Phase 3: Slow precision approach");
 
-        // Stop motors
-        outtakeLeft.setSpeed(0);
-        outtakeRight.setSpeed(0);
+        // Apply holding power to prevent sliding down during transition
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
 
         // Move to slow approach phase
         homingPhaseStartTime = millis();
@@ -1277,7 +1355,7 @@ void Robot::updateHomingRetraction() {
         return;
     }
 
-    // Continue retraction upward
+    // Continue retraction away from limit switch (upward to clear the switch)
     int retractionSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
     outtakeLeft.setSpeed(retractionSpeed);
     outtakeRight.setSpeed(retractionSpeed);
@@ -1290,6 +1368,12 @@ void Robot::updateHomingSlowApproach() {
     // Safety timeout check
     if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
         ERROR_PRINTLN("HOMING FAILED: Timeout during slow approach");
+
+        // Apply holding power to prevent slide from falling on timeout
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
         homingComplete = true;
         setRobotState(config::MANUAL_CONTROL);
         return;
@@ -1300,9 +1384,10 @@ void Robot::updateHomingSlowApproach() {
         DEBUG_PRINTLN("Phase 3 complete: Precision home position found");
         DEBUG_PRINTLN("Phase 4: Moving to safe operating position");
 
-        // Stop motors immediately
-        outtakeLeft.setSpeed(0);
-        outtakeRight.setSpeed(0);
+        // Apply holding power to prevent sliding down during transition
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
 
         // Move to final positioning phase
         homingPhaseStartTime = millis();
@@ -1324,6 +1409,12 @@ void Robot::updateHomingFinalPosition() {
     // Safety timeout check
     if (totalElapsed > config::tuning::HOMING_TIMEOUT_MS) {
         ERROR_PRINTLN("HOMING FAILED: Timeout during final positioning");
+
+        // Apply holding power to prevent slide from falling on timeout
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
+
         homingComplete = true;
         setRobotState(config::MANUAL_CONTROL);
         return;
@@ -1334,9 +1425,10 @@ void Robot::updateHomingFinalPosition() {
         DEBUG_PRINTLN("Phase 4 complete: Safe operating position reached");
         DEBUG_PRINTLN("=== HOMING SEQUENCE COMPLETE ===");
 
-        // Stop motors
-        outtakeLeft.setSpeed(0);
-        outtakeRight.setSpeed(0);
+        // Apply holding power to maintain position above the switch
+        int holdPower = PWMUtils::percentageToPWM(config::tuning::OUTTAKE_HOLD_POWER_PERCENT);
+        outtakeLeft.setSpeed(holdPower);
+        outtakeRight.setSpeed(holdPower);
 
         // Mark homing as complete
         homingComplete = true;
@@ -1344,8 +1436,8 @@ void Robot::updateHomingFinalPosition() {
         return;
     }
 
-    // Continue moving to safe position upward
-    int safePositionSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT);
+    // Continue moving to safe position (upward away from limit switch)
+    int safePositionSpeed = PWMUtils::percentageToPWM(config::tuning::HOMING_SLOW_SPEED_PERCENT / 2);
     outtakeLeft.setSpeed(safePositionSpeed);
     outtakeRight.setSpeed(safePositionSpeed);
 }
